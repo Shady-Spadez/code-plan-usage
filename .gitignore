@@ -1,0 +1,23 @@
+# Rust build artifacts
+target/
+
+# Runtime-generated files
+*.log
+coding_plan_settings.json
+
+# WiX installer artifacts
+*.wixobj
+*.msi
+*.wixpdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+nul
