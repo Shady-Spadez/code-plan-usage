@@ -492,6 +492,18 @@ impl WidgetApp {
 // ── eframe App ───────────────────────────────────────────────────────────────
 
 impl eframe::App for WidgetApp {
+    /// Override clear color to always use the widget's own background.
+    /// When `show_viewport_immediate` runs the child viewport's UI on the
+    /// parent's egui context, the child's `set_visuals()` overwrites the
+    /// parent's visuals. This causes the rendering loop to clear the widget
+    /// window with the child's opaque panel fill instead of the widget's
+    /// semi-transparent background, producing a black frame.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // The widget window is transparent; the semi-transparent background
+        // comes from egui's CentralPanel (panel_fill), not from the clear.
+        [0.0, 0.0, 0.0, 0.0]
+    }
+
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(windows)]
         if let Some(gl) = frame.gl() {
