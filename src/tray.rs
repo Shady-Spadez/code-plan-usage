@@ -89,12 +89,12 @@ pub mod tray {
     /// the main window is hidden (and the eframe update loop is paused).
     fn cleanup_and_exit() {
         debug_log!("Tray: exit requested, cleaning up and exiting");
-        // SAFETY: Only accessed from the main thread (the menu callback
-        // runs on the same thread that created the tray icon).
-        let tray_icon = unsafe { &mut *TRAY_ICON.0.get() };
-        // Dropping the TrayIcon sends NIM_DELETE to remove it from the
-        // system tray on Windows.
-        tray_icon.take();
+        // NOTE: We do NOT drop the TrayIcon here because we are inside
+        // the menu event handler callback (menu_subclass_proc), which
+        // already holds a borrow on muda's internal RefCell. Dropping
+        // the TrayIcon (and thus the Menu) would trigger a double-borrow
+        // panic. The OS will clean up the tray icon when the process
+        // exits, so this is safe.
         std::process::exit(0);
     }
 

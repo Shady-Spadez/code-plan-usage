@@ -703,7 +703,7 @@ impl eframe::App for WidgetApp {
 
         let tooltip_height = if show_tooltip {
             let lines = self.usage.as_ref().map_or(0, |u| u.len());
-            lines as f32 * 18.0 + 16.0
+            lines as f32 * 18.0 + 24.0
         } else {
             0.0
         };
