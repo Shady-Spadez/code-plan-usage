@@ -308,16 +308,14 @@ struct WidgetApp {
     was_hovered: bool,
     is_dragging: bool,
     show_settings: bool,
-    settings_was_open: bool,
     notification_sent: bool,
     animated_percent: f64,
     last_widget_size: WidgetSize,
-    saved_widget_pos: Option<(f32, f32)>,
     #[cfg(windows)]
     color_key_applied: bool,
     frame_count: u64,
-    /// Previous mouse position in screen coordinates during a drag.
-    drag_prev_screen_mouse: Option<Pos2>,
+    /// Offset from window origin to mouse at drag start (for lerp-based tracking).
+    drag_offset: Option<egui::Vec2>,
     /// True while a background refresh thread is running.
     refresh_in_progress: bool,
     /// Shared handle to the background thread's result.
@@ -339,15 +337,13 @@ impl WidgetApp {
             was_hovered: false,
             is_dragging: false,
             show_settings: false,
-            settings_was_open: false,
             notification_sent: false,
             animated_percent: 0.0,
             last_widget_size: widget_size,
-            saved_widget_pos: None,
             #[cfg(windows)]
             color_key_applied: false,
             frame_count: 0,
-            drag_prev_screen_mouse: None,
+            drag_offset: None,
             refresh_in_progress: false,
             pending_result: None,
             tooltip_expanded: false,
@@ -546,79 +542,10 @@ impl eframe::App for WidgetApp {
             self.animated_percent = target;
         }
 
-        // Dynamic window sizing (only when settings is not open)
-        let current_size = self.settings.widget_size;
-        if current_size != self.last_widget_size {
-            debug_log!(
-                "Widget size changed: {:?} -> {:?}",
-                self.last_widget_size,
-                current_size
-            );
-            self.last_widget_size = current_size;
-            if !self.show_settings {
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(current_size.window_size()));
-            }
-        }
-
-        // Handle settings window open/close: resize viewport accordingly
-        if self.show_settings != self.settings_was_open {
-            if self.show_settings {
-                debug_log!("Settings window opened");
-                // Opening settings: save widget position, then expand viewport
-                if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
-                    self.saved_widget_pos = Some((rect.min.x, rect.min.y));
-                    debug_log!(
-                        "Saved widget position: ({:.0}, {:.0})",
-                        rect.min.x,
-                        rect.min.y
-                    );
-                }
-                let settings_size = egui::vec2(520.0, 620.0);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(settings_size));
-                // Center on screen
-                if let Some(monitor_size) = ctx.input(|i| i.viewport().monitor_size) {
-                    let new_pos = egui::pos2(
-                        ((monitor_size.x - settings_size.x) / 2.0).max(0.0),
-                        ((monitor_size.y - settings_size.y) / 2.0).max(0.0),
-                    );
-                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(new_pos));
-                }
-            } else {
-                debug_log!("Settings window closed");
-                // Closing settings: restore widget size, position, and undecorated look
-                let widget_size = self.settings.widget_size.window_size();
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(widget_size));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(false));
-                if let Some((x, y)) = self.saved_widget_pos {
-                    debug_log!("Restoring widget position: ({:.0}, {:.0})", x, y);
-                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::Pos2::new(
-                        x, y,
-                    )));
-                }
-            }
-            self.settings_was_open = self.show_settings;
-        }
-
-        // Theme visuals
-        let colors = self.settings.theme.colors();
-        let mut visuals = ctx.style().visuals.clone();
-        visuals.panel_fill = colors.bg_fill;
-        visuals.window_fill = Color32::from_rgb(0, 255, 255);
-        visuals.faint_bg_color = Color32::TRANSPARENT;
-        visuals.extreme_bg_color = Color32::TRANSPARENT;
-        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, colors.widget_fg);
-        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, colors.widget_fg);
-        ctx.set_visuals(visuals);
-
-        // Check tray events (Windows only)
+        // ── Check tray events FIRST so show_settings is set before the
+        //     settings open/close handler runs ──
         #[cfg(windows)]
         {
-            // ShowHide, Settings, and Exit are handled directly in the
-            // menu event callback (see tray.rs) so they work even when
-            // the window is hidden.
             if tray::tray::SETTINGS_REQUESTED.swap(false, std::sync::atomic::Ordering::SeqCst) {
                 debug_log!("Tray: settings requested");
                 self.show_settings = true;
@@ -631,6 +558,29 @@ impl eframe::App for WidgetApp {
                 None => {}
             }
         }
+
+        // Dynamic window sizing
+        let current_size = self.settings.widget_size;
+        if current_size != self.last_widget_size {
+            debug_log!(
+                "Widget size changed: {:?} -> {:?}",
+                self.last_widget_size,
+                current_size
+            );
+            self.last_widget_size = current_size;
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(current_size.window_size()));
+        }
+
+        // Theme visuals for widget (always use widget theme)
+        let colors = self.settings.theme.colors();
+        let mut visuals = ctx.style().visuals.clone();
+        visuals.panel_fill = colors.bg_fill;
+        visuals.window_fill = Color32::from_rgb(0, 255, 255);
+        visuals.faint_bg_color = Color32::TRANSPARENT;
+        visuals.extreme_bg_color = Color32::TRANSPARENT;
+        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, colors.widget_fg);
+        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, colors.widget_fg);
+        ctx.set_visuals(visuals);
 
         // Periodic refresh (non-blocking: spawns background thread)
         if self.needs_periodic_refresh() {
@@ -648,11 +598,91 @@ impl eframe::App for WidgetApp {
             ctx.request_repaint_after(Duration::from_secs(1));
         }
 
-        // Settings window
+        // ── Settings viewport (separate OS window via immediate viewport) ──
         if self.show_settings {
-            self.render_settings_window(ctx);
+            let settings_viewport_id = egui::ViewportId::from_hash_of("settings");
+            let settings_size = egui::vec2(640.0, 720.0);
+
+            let center_pos = ctx.input(|i| {
+                i.viewport().monitor_size.map(|ms| {
+                    egui::pos2(
+                        ((ms.x - settings_size.x) / 2.0).max(0.0),
+                        ((ms.y - settings_size.y) / 2.0).max(0.0),
+                    )
+                })
+            });
+
+            let mut viewport_builder = egui::ViewportBuilder::default()
+                .with_title("⚙ 设置")
+                .with_inner_size(settings_size)
+                .with_resizable(false);
+
+            if let Some(pos) = center_pos {
+                viewport_builder = viewport_builder.with_position(pos);
+            }
+
+            // Clone settings so the immediate viewport can mutate them independently
+            let mut settings_clone = self.settings.clone();
+            let mut show = true;
+            let mut notif = self.notification_sent;
+
+            ctx.show_viewport_immediate(
+                settings_viewport_id,
+                viewport_builder,
+                |ctx, class| {
+                    if class == egui::ViewportClass::Immediate {
+                        // Check if user closed the viewport via OS close button
+                        if ctx.input(|i| i.viewport().close_requested()) {
+                            show = false;
+                            return;
+                        }
+                        // Set dark theme for settings viewport
+                        let mut visuals = egui::Visuals::dark();
+                        visuals.panel_fill = Color32::from_rgb(0x1E, 0x1E, 0x22);
+                        visuals.window_fill = Color32::from_rgb(0x25, 0x25, 0x28);
+                        visuals.faint_bg_color = Color32::from_rgb(0x2D, 0x2D, 0x32);
+                        visuals.extreme_bg_color = Color32::from_rgb(0x18, 0x18, 0x1C);
+                        visuals.widgets.noninteractive.bg_fill =
+                            Color32::from_rgb(0x33, 0x33, 0x38);
+                        visuals.widgets.inactive.bg_fill =
+                            Color32::from_rgb(0x3A, 0x3A, 0x40);
+                        visuals.widgets.hovered.bg_fill =
+                            Color32::from_rgb(0x45, 0x45, 0x4C);
+                        visuals.widgets.active.bg_fill =
+                            Color32::from_rgb(0x50, 0x50, 0x58);
+                        visuals.widgets.open.bg_fill =
+                            Color32::from_rgb(0x3A, 0x3A, 0x40);
+                        visuals.selection.bg_fill = Color32::from_rgb(0x00, 0x78, 0xD4);
+                        visuals.widgets.hovered.fg_stroke =
+                            Stroke::new(1.0, Color32::WHITE);
+                        visuals.widgets.active.fg_stroke =
+                            Stroke::new(1.0, Color32::WHITE);
+                        ctx.set_visuals(visuals);
+
+                        // Render settings UI
+                        Self::render_settings_viewport(
+                            ctx,
+                            &mut settings_clone,
+                            &mut show,
+                            &mut notif,
+                        );
+                    }
+                },
+            );
+
+            // Apply changes back from the settings viewport
+            self.settings = settings_clone;
+            if !show {
+                debug_log!("Settings: closed via viewport");
+                self.show_settings = false;
+                self.notification_sent = notif;
+                #[cfg(windows)]
+                apply_auto_start(self.settings.auto_start);
+                self.start_refresh();
+            }
         }
 
+        // ── Widget rendering ──
         // ── Input handling (read early for tooltip sizing) ──
         let (pointer_pos, button_down, button_clicked, viewport_rect) = ctx.input(|i| {
             (
@@ -665,17 +695,16 @@ impl eframe::App for WidgetApp {
 
         // ── Direct rendering (no panel, fully transparent background) ──
         let widget_size = self.settings.widget_size.window_size();
+        let cfg = self.settings.widget_size.config();
+        let radius = cfg.circle_radius;
+        let center = egui::pos2(2.0 + radius + cfg.stroke_width / 2.0, widget_size.y / 2.0);
 
-        // Determine if tooltip should be shown
-        let show_tooltip = {
-            let mut h = false;
-            if let Some(pos) = pointer_pos {
-                if egui::Rect::from_min_size(egui::Pos2::ZERO, widget_size).contains(pos) {
-                    h = true;
-                }
-            }
-            h && self.usage.as_ref().map_or(false, |u| !u.is_empty())
-        };
+        // Only the circle area responds to hover/drag, not the transparent area
+        let circle_hovered = pointer_pos.map_or(false, |pos| pos.distance(center) <= radius);
+
+        // Determine if tooltip should be shown (suppress while dragging)
+        let show_tooltip =
+            circle_hovered && !self.is_dragging && self.usage.as_ref().map_or(false, |u| !u.is_empty());
 
         // Calculate tooltip height
         let tooltip_height = if show_tooltip {
@@ -685,39 +714,24 @@ impl eframe::App for WidgetApp {
             0.0
         };
 
-        // Handle window expansion for tooltip
-        if show_tooltip != self.tooltip_expanded {
-            self.tooltip_expanded = show_tooltip;
-            let effective_h = widget_size.y + tooltip_height;
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                widget_size.x,
-                effective_h,
-            )));
-        }
-
-        // Use expanded size for hover detection (includes tooltip area)
-        let effective_h = if self.tooltip_expanded {
-            widget_size.y + tooltip_height
-        } else {
-            widget_size.y
-        };
-        let widget_rect =
-            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(widget_size.x, effective_h));
-
-        let mut hovered = false;
-        if let Some(pos) = pointer_pos {
-            if widget_rect.contains(pos) {
-                hovered = true;
+        // Handle window expansion for tooltip (only when settings is not open)
+        if !self.show_settings {
+            if show_tooltip != self.tooltip_expanded {
+                self.tooltip_expanded = show_tooltip;
+                let effective_h = widget_size.y + tooltip_height;
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                    widget_size.x,
+                    effective_h,
+                )));
             }
         }
+
+        let hovered = circle_hovered;
 
         let layer_id = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("widget"));
         let painter = ctx.layer_painter(layer_id);
 
-        let cfg = self.settings.widget_size.config();
         let colors = self.settings.theme.colors();
-        let radius = cfg.circle_radius;
-        let center = egui::pos2(2.0 + radius + cfg.stroke_width / 2.0, widget_size.y / 2.0);
 
         // Background circle
         painter.circle_filled(center, radius, colors.circle_bg);
@@ -803,54 +817,60 @@ impl eframe::App for WidgetApp {
             }
         }
 
-        // Click to open URL
-        if button_clicked && hovered {
-            let url = console_url(&self.settings.region);
-            open_url(&url);
-        }
+        // ── Widget interactions (only when settings is not open) ──
+        if !self.show_settings {
+            // Click to open URL
+            if button_clicked && hovered {
+                let url = console_url(&self.settings.region);
+                open_url(&url);
+            }
 
-        // Custom non-blocking drag: track mouse in screen coords and move window
-        if button_down && hovered {
-            if let (Some(viewport_min), Some(current_pos)) =
-                (viewport_rect.map(|r| r.min), pointer_pos)
-            {
-                let screen_mouse = viewport_min + current_pos.to_vec2();
+            // Custom non-blocking drag: track mouse in screen coords and move window.
+            // Only the circle area initiates a drag; once started, continue tracking
+            // even if the mouse leaves the circle (fast drag), so the effect is not lost.
+            // Uses lerp to avoid position flicker from the viewport feedback loop.
+            if button_down && (circle_hovered || self.is_dragging) {
+                if let (Some(viewport_min), Some(current_pos)) =
+                    (viewport_rect.map(|r| r.min), pointer_pos)
+                {
+                    let screen_mouse = viewport_min + current_pos.to_vec2();
 
-                if !self.is_dragging {
-                    self.is_dragging = true;
-                    self.drag_prev_screen_mouse = Some(screen_mouse);
+                    if !self.is_dragging {
+                        self.is_dragging = true;
+                        self.drag_offset = Some(screen_mouse - viewport_min);
+                    }
+
+                    if let Some(offset) = self.drag_offset {
+                        let target = screen_mouse - offset;
+                        let current = viewport_min;
+                        let lerp_factor = 0.6;
+                        let new_x = current.x + (target.x - current.x) * lerp_factor;
+                        let new_y = current.y + (target.y - current.y) * lerp_factor;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(
+                            egui::Pos2::new(new_x, new_y),
+                        ));
+                    }
                 }
+            }
 
-                if let Some(prev_screen) = self.drag_prev_screen_mouse {
-                    let delta = screen_mouse - prev_screen;
-                    let new_x = viewport_min.x + delta.x;
-                    let new_y = viewport_min.y + delta.y;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(
-                        egui::Pos2::new(new_x, new_y),
-                    ));
+            if self.is_dragging && !button_down {
+                self.is_dragging = false;
+                self.drag_offset = None;
+                if let Some(rect) = viewport_rect {
+                    self.settings.window_x = Some(rect.min.x);
+                    self.settings.window_y = Some(rect.min.y);
+                    self.settings.save();
                 }
-
-                self.drag_prev_screen_mouse = Some(screen_mouse);
             }
-        }
 
-        if self.is_dragging && !button_down {
-            self.is_dragging = false;
-            self.drag_prev_screen_mouse = None;
-            if let Some(rect) = viewport_rect {
-                self.settings.window_x = Some(rect.min.x);
-                self.settings.window_y = Some(rect.min.y);
-                self.settings.save();
+            // Hover-triggered refresh (non-blocking: spawns background thread)
+            if hovered && !self.was_hovered {
+                if self.last_refresh.elapsed() >= HOVER_COOLDOWN {
+                    self.start_refresh();
+                }
             }
+            self.was_hovered = hovered;
         }
-
-        // Hover-triggered refresh (non-blocking: spawns background thread)
-        if hovered && !self.was_hovered {
-            if self.last_refresh.elapsed() >= HOVER_COOLDOWN {
-                self.start_refresh();
-            }
-        }
-        self.was_hovered = hovered;
     }
 }
 
@@ -858,219 +878,273 @@ impl eframe::App for WidgetApp {
 
 impl WidgetApp {
 
-    fn render_settings_window(&mut self, ctx: &egui::Context) {
-        let mut open = self.show_settings;
+    fn render_settings_viewport(
+        ctx: &egui::Context,
+        settings: &mut Settings,
+        show: &mut bool,
+        notif: &mut bool,
+    ) {
+        let mut open = true;
         let mut needs_save = false;
-        egui::Window::new("设置")
+
+        let accent = Color32::from_rgb(0x00, 0x78, 0xD4);
+        let card_bg = Color32::from_rgb(0x2D, 0x2D, 0x32);
+        let text_muted = Color32::from_rgb(0x99, 0x99, 0x9F);
+
+        egui::Window::new("⚙ 设置")
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
-            .default_size(egui::vec2(500.0, 580.0))
-            .default_pos(egui::pos2(10.0, 30.0))
+            .default_size(egui::vec2(620.0, 680.0))
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    let colors = self.settings.theme.colors();
-                    let section_gap = 16.0;
-                    let field_gap = 8.0;
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        let section_gap = 12.0;
 
-                    // ── 凭证 ──
-                    ui.heading("凭证");
-                    ui.separator();
-                    ui.add_space(field_gap);
-                    ui.label("Cookie:");
-                    let cookie_before = self.settings.cookie.clone();
-                    ui.add_sized(
-                        egui::vec2(ui.available_width(), 100.0),
-                        egui::TextEdit::multiline(&mut self.settings.cookie),
-                    );
-                    if self.settings.cookie != cookie_before {
-                        needs_save = true;
-                    }
-                    ui.add_space(field_gap);
-                    ui.label("CSRF Token:");
-                    let csrf_before = self.settings.csrf_token.clone();
-                    ui.text_edit_singleline(&mut self.settings.csrf_token);
-                    if self.settings.csrf_token != csrf_before {
-                        needs_save = true;
-                    }
-                    ui.add_space(section_gap);
+                        // ── Helper: draw a card-style section ──
+                        let section = |ui: &mut egui::Ui, title: &str, body: &mut dyn FnMut(&mut egui::Ui)| {
+                            egui::Frame::NONE
+                                .fill(card_bg)
+                                .corner_radius(egui::CornerRadius::same(8))
+                                .inner_margin(egui::Margin::same(12))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(title)
+                                            .color(Color32::WHITE)
+                                            .font(egui::FontId::proportional(14.0))
+                                            .strong(),
+                                    );
+                                    ui.add_space(8.0);
+                                    body(ui);
+                                });
+                            ui.add_space(section_gap);
+                        };
 
-                    // ── 区域 ──
-                    ui.heading("区域");
-                    ui.separator();
-                    ui.add_space(field_gap);
-                    ui.horizontal(|ui| {
-                        ui.label("区域代码:");
-                        let region_before = self.settings.region.clone();
-                        ui.add_sized(
-                            egui::vec2(200.0, 20.0),
-                            egui::TextEdit::singleline(&mut self.settings.region),
-                        );
-                        if self.settings.region != region_before {
-                            needs_save = true;
-                        }
-                    });
-                    ui.add_space(section_gap);
-
-                    // ── 刷新 ──
-                    ui.heading("刷新");
-                    ui.separator();
-                    ui.add_space(field_gap);
-                    ui.horizontal(|ui| {
-                        ui.label("刷新间隔 (秒):");
-                        let mut secs = self.settings.refresh_interval_secs;
-                        if secs < 30 {
-                            secs = 30;
-                        }
-                        if ui
-                            .add(egui::DragValue::new(&mut secs).range(30..=3600))
-                            .changed()
-                        {
-                            self.settings.refresh_interval_secs = secs;
-                            needs_save = true;
-                            debug_log!("Settings: refresh_interval changed to {}s", secs);
-                        }
-                    });
-                    ui.add_space(section_gap);
-
-                    // ── 通知 ──
-                    ui.heading("通知");
-                    ui.separator();
-                    ui.add_space(field_gap);
-                    ui.horizontal(|ui| {
-                        ui.label("用量阈值 (%):");
-                        let mut threshold = self.settings.notification_threshold;
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut threshold)
-                                    .range(0.0..=100.0)
-                                    .speed(1.0),
-                            )
-                            .changed()
-                        {
-                            self.settings.notification_threshold = threshold;
-                            needs_save = true;
-                            debug_log!(
-                                "Settings: notification_threshold changed to {:.0}%",
-                                threshold
+                        // ── 凭证 ──
+                        section(ui, "🔑 凭证", &mut |ui| {
+                            ui.label(
+                                egui::RichText::new("Cookie")
+                                    .color(text_muted)
+                                    .font(egui::FontId::proportional(12.0)),
                             );
-                        }
-                    });
-                    if self.settings.notification_threshold <= 0.0 {
-                        ui.label(
-                            egui::RichText::new("  设为 0 禁用通知")
-                                .color(colors.text_secondary)
-                                .font(egui::FontId::proportional(11.0)),
-                        );
-                    }
-                    ui.add_space(section_gap);
+                            let cookie_before = settings.cookie.clone();
+                            ui.add_sized(
+                                egui::vec2(ui.available_width(), 80.0),
+                                egui::TextEdit::multiline(&mut settings.cookie)
+                                    .hint_text("粘贴浏览器 Cookie..."),
+                            );
+                            if settings.cookie != cookie_before {
+                                needs_save = true;
+                            }
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new("CSRF Token")
+                                    .color(text_muted)
+                                    .font(egui::FontId::proportional(12.0)),
+                            );
+                            let csrf_before = settings.csrf_token.clone();
+                            ui.add_sized(
+                                egui::vec2(ui.available_width(), 20.0),
+                                egui::TextEdit::singleline(&mut settings.csrf_token)
+                                    .hint_text("粘贴 CSRF Token..."),
+                            );
+                            if settings.csrf_token != csrf_before {
+                                needs_save = true;
+                            }
+                        });
 
-                    // ── 外观 ──
-                    ui.heading("外观");
-                    ui.separator();
-                    ui.add_space(field_gap);
-                    ui.horizontal(|ui| {
-                        ui.label("主题:");
-                        let is_dark = matches!(self.settings.theme, Theme::Dark);
-                        if ui.selectable_label(is_dark, "🌙 暗色").clicked() {
-                            self.settings.theme = Theme::Dark;
-                            needs_save = true;
-                            debug_log!("Settings: theme changed to Dark");
-                        }
-                        if ui.selectable_label(!is_dark, "☀️ 亮色").clicked() {
-                            self.settings.theme = Theme::Light;
-                            needs_save = true;
-                            debug_log!("Settings: theme changed to Light");
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("窗口大小:");
-                        let current = self.settings.widget_size;
-                        if ui
-                            .selectable_label(current == WidgetSize::Small, "小")
-                            .clicked()
-                        {
-                            self.settings.widget_size = WidgetSize::Small;
-                            needs_save = true;
-                            debug_log!("Settings: widget size changed to Small");
-                        }
-                        if ui
-                            .selectable_label(current == WidgetSize::Medium, "中")
-                            .clicked()
-                        {
-                            self.settings.widget_size = WidgetSize::Medium;
-                            needs_save = true;
-                            debug_log!("Settings: widget size changed to Medium");
-                        }
-                        if ui
-                            .selectable_label(current == WidgetSize::Large, "大")
-                            .clicked()
-                        {
-                            self.settings.widget_size = WidgetSize::Large;
-                            needs_save = true;
-                            debug_log!("Settings: widget size changed to Large");
-                        }
-                    });
-                    ui.add_space(section_gap);
+                        // ── 区域 ──
+                        section(ui, "🌐 区域", &mut |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("区域代码")
+                                        .color(text_muted)
+                                        .font(egui::FontId::proportional(12.0)),
+                                );
+                                let region_before = settings.region.clone();
+                                ui.add_sized(
+                                    egui::vec2(160.0, 20.0),
+                                    egui::TextEdit::singleline(&mut settings.region),
+                                );
+                                if settings.region != region_before {
+                                    needs_save = true;
+                                }
+                                ui.label(
+                                    egui::RichText::new("  例如: openai")
+                                        .color(text_muted)
+                                        .font(egui::FontId::proportional(11.0)),
+                                );
+                            });
+                        });
 
-                    // ── 其他 ──
-                    ui.heading("其他");
-                    ui.separator();
-                    ui.add_space(field_gap);
-                    if ui
-                        .checkbox(&mut self.settings.auto_start, "开机自启")
-                        .changed()
-                    {
-                        needs_save = true;
-                        debug_log!(
-                            "Settings: auto_start changed to {}",
-                            self.settings.auto_start
-                        );
-                    }
-                    if ui
-                        .checkbox(&mut self.settings.show_percentage, "显示百分比数字")
-                        .changed()
-                    {
-                        needs_save = true;
-                        debug_log!(
-                            "Settings: show_percentage changed to {}",
-                            self.settings.show_percentage
-                        );
-                    }
-                    ui.add_space(20.0);
+                        // ── 刷新 ──
+                        section(ui, "🔄 刷新", &mut |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("刷新间隔")
+                                        .color(text_muted)
+                                        .font(egui::FontId::proportional(12.0)),
+                                );
+                                let mut secs = settings.refresh_interval_secs;
+                                if secs < 30 {
+                                    secs = 30;
+                                }
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut secs)
+                                            .range(30..=3600)
+                                            .suffix(" 秒"),
+                                    )
+                                    .changed()
+                                {
+                                    settings.refresh_interval_secs = secs;
+                                    needs_save = true;
+                                }
+                            });
+                        });
 
-                    // ── 保存按钮 ──
-                    ui.separator();
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("保存并关闭").clicked() {
-                            debug_log!("Settings: save & close clicked");
-                            self.settings.save();
-                            #[cfg(windows)]
-                            apply_auto_start(self.settings.auto_start);
-                            self.show_settings = false;
-                            self.notification_sent = false;
-                            self.start_refresh();
-                        }
+                        // ── 通知 ──
+                        section(ui, "🔔 通知", &mut |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("用量阈值")
+                                        .color(text_muted)
+                                        .font(egui::FontId::proportional(12.0)),
+                                );
+                                let mut threshold = settings.notification_threshold;
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut threshold)
+                                            .range(0.0..=100.0)
+                                            .speed(1.0)
+                                            .suffix(" %"),
+                                    )
+                                    .changed()
+                                {
+                                    settings.notification_threshold = threshold;
+                                    needs_save = true;
+                                }
+                            });
+                            if settings.notification_threshold <= 0.0 {
+                                ui.label(
+                                    egui::RichText::new("设为 0 可禁用通知")
+                                        .color(text_muted)
+                                        .font(egui::FontId::proportional(11.0)),
+                                );
+                            }
+                        });
+
+                        // ── 外观 ──
+                        section(ui, "🎨 外观", &mut |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("主题")
+                                        .color(text_muted)
+                                        .font(egui::FontId::proportional(12.0)),
+                                );
+                                let is_dark = matches!(settings.theme, Theme::Dark);
+                                if ui.selectable_label(is_dark, "🌙 暗色").clicked() {
+                                    settings.theme = Theme::Dark;
+                                    needs_save = true;
+                                }
+                                if ui.selectable_label(!is_dark, "☀️ 亮色").clicked() {
+                                    settings.theme = Theme::Light;
+                                    needs_save = true;
+                                }
+                            });
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("窗口大小")
+                                        .color(text_muted)
+                                        .font(egui::FontId::proportional(12.0)),
+                                );
+                                let current = settings.widget_size;
+                                if ui
+                                    .selectable_label(current == WidgetSize::Small, "小")
+                                    .clicked()
+                                {
+                                    settings.widget_size = WidgetSize::Small;
+                                    needs_save = true;
+                                }
+                                if ui
+                                    .selectable_label(current == WidgetSize::Medium, "中")
+                                    .clicked()
+                                {
+                                    settings.widget_size = WidgetSize::Medium;
+                                    needs_save = true;
+                                }
+                                if ui
+                                    .selectable_label(current == WidgetSize::Large, "大")
+                                    .clicked()
+                                {
+                                    settings.widget_size = WidgetSize::Large;
+                                    needs_save = true;
+                                }
+                            });
+                        });
+
+                        // ── 其他 ──
+                        section(ui, "⚙ 其他", &mut |ui| {
+                            if ui
+                                .checkbox(&mut settings.auto_start, "开机自启")
+                                .changed()
+                            {
+                                needs_save = true;
+                            }
+                            if ui
+                                .checkbox(
+                                    &mut settings.show_percentage,
+                                    "显示百分比数字",
+                                )
+                                .changed()
+                            {
+                                needs_save = true;
+                            }
+                        });
+
+                        // ── 保存按钮 ──
+                        ui.add_space(4.0);
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                let btn = egui::Button::new(
+                                    egui::RichText::new("  保存并关闭  ")
+                                        .color(Color32::WHITE)
+                                        .font(egui::FontId::proportional(14.0)),
+                                )
+                                .fill(accent)
+                                .corner_radius(egui::CornerRadius::same(6))
+                                .min_size(egui::vec2(140.0, 36.0));
+                                if ui.add(btn).clicked() {
+                                    debug_log!("Settings: save & close clicked");
+                                    settings.save();
+                                    #[cfg(windows)]
+                                    apply_auto_start(settings.auto_start);
+                                    *notif = false;
+                                    *show = false;
+                                }
+                            },
+                        );
                     });
-                });
             });
 
-        // Save on every change, and also when closing via the X button
+        // Save on every change
         if needs_save {
             debug_log!("Settings: auto-saving changes");
-            self.settings.save();
+            settings.save();
             #[cfg(windows)]
-            apply_auto_start(self.settings.auto_start);
+            apply_auto_start(settings.auto_start);
         }
+        // Close via X button on the egui Window
         if !open {
             debug_log!("Settings: closed via X button");
-            // Save on close via X button (in case text fields changed)
-            self.settings.save();
+            settings.save();
             #[cfg(windows)]
-            apply_auto_start(self.settings.auto_start);
-            self.show_settings = false;
-            self.notification_sent = false;
-            self.start_refresh();
+            apply_auto_start(settings.auto_start);
+            *notif = false;
+            *show = false;
         }
     }
 }
