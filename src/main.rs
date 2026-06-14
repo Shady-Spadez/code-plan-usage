@@ -573,9 +573,18 @@ impl eframe::App for WidgetApp {
                         rect.min.y
                     );
                 }
+                let settings_size = egui::vec2(520.0, 620.0);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(520.0, 620.0)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(settings_size));
+                // Center on screen
+                if let Some(monitor_size) = ctx.input(|i| i.viewport().monitor_size) {
+                    let new_pos = egui::pos2(
+                        ((monitor_size.x - settings_size.x) / 2.0).max(0.0),
+                        ((monitor_size.y - settings_size.y) / 2.0).max(0.0),
+                    );
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(new_pos));
+                }
             } else {
                 debug_log!("Settings window closed");
                 // Closing settings: restore widget size, position, and undecorated look
@@ -855,7 +864,7 @@ impl WidgetApp {
         egui::Window::new("设置")
             .open(&mut open)
             .collapsible(false)
-            .resizable(true)
+            .resizable(false)
             .default_size(egui::vec2(500.0, 580.0))
             .default_pos(egui::pos2(10.0, 30.0))
             .show(ctx, |ui| {
