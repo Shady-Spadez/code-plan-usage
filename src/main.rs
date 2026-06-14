@@ -79,7 +79,7 @@ impl WidgetSize {
     fn config(&self) -> SizeConfig {
         match self {
             WidgetSize::Small => SizeConfig {
-                dimensions: egui::vec2(180.0, 36.0),
+                dimensions: egui::vec2(240.0, 36.0),
                 circle_radius: 9.0,
                 circle_center_dot: 2.0,
                 stroke_width: 2.0,
@@ -95,7 +95,7 @@ impl WidgetSize {
                 error_font_size: 10.0,
             },
             WidgetSize::Large => SizeConfig {
-                dimensions: egui::vec2(300.0, 60.0),
+                dimensions: egui::vec2(240.0, 60.0),
                 circle_radius: 15.0,
                 circle_center_dot: 4.0,
                 stroke_width: 3.0,
@@ -126,7 +126,7 @@ fn console_url(region: &str) -> String {
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 struct Settings {
     cookie: String,
     csrf_token: String,
@@ -325,6 +325,9 @@ struct WidgetApp {
     /// Shared state for the settings viewport (Rc<RefCell<>> so it persists across frames).
     #[cfg(windows)]
     settings_viewport_data: Option<(
+        std::rc::Rc<std::cell::RefCell<Settings>>,
+        std::rc::Rc<std::cell::Cell<bool>>,
+        std::rc::Rc<std::cell::Cell<usize>>,
         std::rc::Rc<std::cell::RefCell<Settings>>,
         std::rc::Rc<std::cell::Cell<bool>>,
     )>,
@@ -572,10 +575,15 @@ impl eframe::App for WidgetApp {
                     ));
                     let notif_rc =
                         std::rc::Rc::new(std::cell::Cell::new(self.notification_sent));
-                    self.settings_viewport_data = Some((settings_rc, notif_rc));
+                    let tab_rc = std::rc::Rc::new(std::cell::Cell::new(0usize));
+                    let orig_rc = std::rc::Rc::new(std::cell::RefCell::new(
+                        self.settings.clone(),
+                    ));
+                    let confirm_rc = std::rc::Rc::new(std::cell::Cell::new(false));
+                    self.settings_viewport_data = Some((settings_rc, notif_rc, tab_rc, orig_rc, confirm_rc));
                 }
 
-                if let Some((ref settings_rc, ref notif_rc)) = self.settings_viewport_data {
+                if let Some((ref settings_rc, ref notif_rc, ref tab_rc, ref orig_rc, ref confirm_rc)) = self.settings_viewport_data {
                     let viewport_id = egui::ViewportId::from_hash_of("settings");
                     let builder = egui::ViewportBuilder::default()
                         .with_title("⚙ 设置")
@@ -584,13 +592,24 @@ impl eframe::App for WidgetApp {
 
                     let s = settings_rc.clone();
                     let n = notif_rc.clone();
+                    let t = tab_rc.clone();
+                    let o = orig_rc.clone();
+                    let cf = confirm_rc.clone();
                     let should_close = std::rc::Rc::new(std::cell::Cell::new(false));
                     let sc = should_close.clone();
+                    let saved = std::rc::Rc::new(std::cell::Cell::new(false));
+                    let sv = saved.clone();
 
                     ctx.show_viewport_immediate(viewport_id, builder, move |ctx, _class| {
                         // Handle OS close button
                         if ctx.input(|i| i.viewport().close_requested()) {
-                            sc.set(true);
+                            let current = s.borrow();
+                            let original = o.borrow();
+                            if *current != *original {
+                                cf.set(true);
+                            } else {
+                                sc.set(true);
+                            }
                             return;
                         }
 
@@ -617,18 +636,78 @@ impl eframe::App for WidgetApp {
                             Stroke::new(1.0, Color32::WHITE);
                         ctx.set_visuals(visuals);
 
-                        let mut show = true;
-                        let mut notif_val = n.get();
-                        WidgetApp::render_settings_viewport(
-                            ctx,
-                            &mut s.borrow_mut(),
-                            &mut show,
-                            &mut notif_val,
-                        );
-                        n.set(notif_val);
+                        if cf.get() {
+                            // ── Confirmation dialog ──
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                ui.add_space(80.0);
+                                ui.vertical_centered(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("确定要关闭吗？")
+                                            .color(Color32::WHITE)
+                                            .font(egui::FontId::proportional(16.0))
+                                            .strong(),
+                                    );
+                                    ui.add_space(4.0);
+                                    ui.label(
+                                        egui::RichText::new("有未保存的更改")
+                                            .color(Color32::from_rgb(0x99, 0x99, 0x9F))
+                                            .font(egui::FontId::proportional(13.0)),
+                                    );
+                                    ui.add_space(24.0);
+                                    ui.horizontal(|ui| {
+                                        let spacing = 12.0;
+                                        let btn_w = (ui.available_width() - spacing) / 2.0;
+                                        let save_btn = egui::Button::new(
+                                            egui::RichText::new("  保存并退出  ")
+                                                .color(Color32::WHITE)
+                                                .font(egui::FontId::proportional(14.0)),
+                                        )
+                                        .fill(Color32::from_rgb(0x00, 0x78, 0xD4))
+                                        .corner_radius(egui::CornerRadius::same(6))
+                                        .min_size(egui::vec2(btn_w, 36.0));
+                                        if ui.add(save_btn).clicked() {
+                                            s.borrow().save();
+                                            #[cfg(windows)]
+                                            apply_auto_start(s.borrow().auto_start);
+                                            sv.set(true);
+                                            sc.set(true);
+                                        }
+                                        ui.add_space(12.0);
+                                        let discard_btn = egui::Button::new(
+                                            egui::RichText::new("  不保存  ")
+                                                .color(Color32::from_rgb(0x99, 0x99, 0x9F))
+                                                .font(egui::FontId::proportional(14.0)),
+                                        )
+                                        .fill(Color32::from_rgb(0x3A, 0x3A, 0x40))
+                                        .corner_radius(egui::CornerRadius::same(6))
+                                        .min_size(egui::vec2(btn_w, 36.0));
+                                        if ui.add(discard_btn).clicked() {
+                                            sv.set(false);
+                                            sc.set(true);
+                                        }
+                                    });
+                                });
+                            });
+                        } else {
+                            let mut show = true;
+                            let mut notif_val = n.get();
+                            let mut tab_val = t.get();
+                            let mut saved_val = sv.get();
+                            WidgetApp::render_settings_viewport(
+                                ctx,
+                                &mut s.borrow_mut(),
+                                &mut show,
+                                &mut notif_val,
+                                &mut tab_val,
+                                &mut saved_val,
+                            );
+                            n.set(notif_val);
+                            t.set(tab_val);
+                            sv.set(saved_val);
 
-                        if !show {
-                            sc.set(true);
+                            if !show {
+                                sc.set(true);
+                            }
                         }
 
                         ctx.request_repaint();
@@ -636,14 +715,30 @@ impl eframe::App for WidgetApp {
 
                     if should_close.get() {
                         debug_log!("Settings: closed");
-                        self.settings = settings_rc.borrow().clone();
+                        if saved.get() {
+                            self.settings = settings_rc.borrow().clone();
+                            self.settings.save();
+                            apply_auto_start(self.settings.auto_start);
+                        } else {
+                            // Revert to original settings
+                            self.settings = orig_rc.borrow().clone();
+                        }
                         self.notification_sent = notif_rc.get();
-                        self.settings.save();
-                        apply_auto_start(self.settings.auto_start);
                         self.show_settings = false;
                         self.settings_viewport_data = None;
                         self.start_refresh();
                     }
+                }
+            }
+
+            // Sync appearance changes from settings viewport in real-time
+            #[cfg(windows)]
+            if self.show_settings {
+                if let Some((ref settings_rc, _, _, _, _)) = self.settings_viewport_data {
+                    let s = settings_rc.borrow();
+                    self.settings.theme = s.theme;
+                    self.settings.widget_size = s.widget_size;
+                    self.settings.show_percentage = s.show_percentage;
                 }
             }
 
@@ -816,8 +911,7 @@ impl eframe::App for WidgetApp {
         }
 
         if button_clicked && hovered {
-            let url = console_url(&self.settings.region);
-            open_url(&url);
+            self.show_settings = true;
         }
 
         if button_down && (circle_hovered || self.is_dragging) {
@@ -872,22 +966,35 @@ impl WidgetApp {
         settings: &mut Settings,
         show: &mut bool,
         notif: &mut bool,
+        tab: &mut usize,
+        saved: &mut bool,
     ) {
-        let mut needs_save = false;
-
         let accent = Color32::from_rgb(0x00, 0x78, 0xD4);
         let card_bg = Color32::from_rgb(0x2D, 0x2D, 0x32);
         let text_muted = Color32::from_rgb(0x99, 0x99, 0x9F);
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            // Header
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new("⚙ 设置")
-                    .color(Color32::WHITE)
-                    .font(egui::FontId::proportional(18.0))
-                    .strong(),
-            );
+            // ── Tab bar ──
+            let tab_labels = ["📋 通用", "🍪 Cookie"];
+            let mut selected = *tab;
+            ui.horizontal(|ui| {
+                for (i, label) in tab_labels.iter().enumerate() {
+                    let is_selected = selected == i;
+                    let text = if is_selected {
+                        egui::RichText::new(*label).color(Color32::WHITE).strong()
+                    } else {
+                        egui::RichText::new(*label).color(text_muted)
+                    };
+                    let resp = ui.selectable_label(is_selected, text);
+                    if resp.clicked() {
+                        selected = i;
+                    }
+                    ui.add_space(4.0);
+                }
+            });
+            if selected != *tab {
+                *tab = selected;
+            }
             ui.add_space(8.0);
 
             egui::ScrollArea::vertical()
@@ -914,193 +1021,197 @@ impl WidgetApp {
                             ui.add_space(section_gap);
                         };
 
-                        // ── 凭证 ──
-                        section(ui, "🔑 凭证", &mut |ui| {
-                            ui.label(
-                                egui::RichText::new("Cookie")
-                                    .color(text_muted)
-                                    .font(egui::FontId::proportional(12.0)),
-                            );
-                            let cookie_before = settings.cookie.clone();
-                            ui.add_sized(
-                                egui::vec2(ui.available_width(), 80.0),
-                                egui::TextEdit::multiline(&mut settings.cookie)
-                                    .hint_text("粘贴浏览器 Cookie..."),
-                            );
-                            if settings.cookie != cookie_before {
-                                needs_save = true;
-                            }
-                            ui.add_space(8.0);
-                            ui.label(
-                                egui::RichText::new("CSRF Token")
-                                    .color(text_muted)
-                                    .font(egui::FontId::proportional(12.0)),
-                            );
-                            let csrf_before = settings.csrf_token.clone();
-                            ui.add_sized(
-                                egui::vec2(ui.available_width(), 20.0),
-                                egui::TextEdit::singleline(&mut settings.csrf_token)
-                                    .hint_text("粘贴 CSRF Token..."),
-                            );
-                            if settings.csrf_token != csrf_before {
-                                needs_save = true;
-                            }
-                        });
+                        if *tab == 0 {
+                            // ── 通用 ──
 
-                        // ── 区域 ──
-                        section(ui, "🌐 区域", &mut |ui| {
-                            ui.horizontal(|ui| {
+                            // ── 区域 ──
+                            section(ui, "🌐 区域", &mut |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("区域代码")
+                                            .color(text_muted)
+                                            .font(egui::FontId::proportional(12.0)),
+                                    );
+                                    ui.add_sized(
+                                        egui::vec2(160.0, 20.0),
+                                        egui::TextEdit::singleline(&mut settings.region),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new("  例如: openai")
+                                            .color(text_muted)
+                                            .font(egui::FontId::proportional(11.0)),
+                                    );
+                                });
+                            });
+
+                            // ── 刷新 ──
+                            section(ui, "🔄 刷新", &mut |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("刷新间隔")
+                                            .color(text_muted)
+                                            .font(egui::FontId::proportional(12.0)),
+                                    );
+                                    let mut secs = settings.refresh_interval_secs;
+                                    if secs < 30 {
+                                        secs = 30;
+                                    }
+                                    if ui
+                                        .add(
+                                            egui::DragValue::new(&mut secs)
+                                                .range(30..=3600)
+                                                .suffix(" 秒"),
+                                        )
+                                        .changed()
+                                    {
+                                        settings.refresh_interval_secs = secs;
+                                    }
+                                });
+                            });
+
+                            // ── 通知 ──
+                            section(ui, "🔔 通知", &mut |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("用量阈值")
+                                            .color(text_muted)
+                                            .font(egui::FontId::proportional(12.0)),
+                                    );
+                                    let mut threshold = settings.notification_threshold;
+                                    if ui
+                                        .add(
+                                            egui::DragValue::new(&mut threshold)
+                                                .range(0.0..=100.0)
+                                                .speed(1.0)
+                                                .suffix(" %"),
+                                        )
+                                        .changed()
+                                    {
+                                        settings.notification_threshold = threshold;
+                                    }
+                                });
+                                if settings.notification_threshold <= 0.0 {
+                                    ui.label(
+                                        egui::RichText::new("设为 0 可禁用通知")
+                                            .color(text_muted)
+                                            .font(egui::FontId::proportional(11.0)),
+                                    );
+                                }
+                            });
+
+                            // ── 外观 ──
+                            section(ui, "🎨 外观", &mut |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("主题")
+                                            .color(text_muted)
+                                            .font(egui::FontId::proportional(12.0)),
+                                    );
+                                    let is_dark = matches!(settings.theme, Theme::Dark);
+                                    if ui.selectable_label(is_dark, "🌙 暗色").clicked() {
+                                        settings.theme = Theme::Dark;
+                                    }
+                                    if ui.selectable_label(!is_dark, "☀️ 亮色").clicked() {
+                                        settings.theme = Theme::Light;
+                                    }
+                                });
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("窗口大小")
+                                            .color(text_muted)
+                                            .font(egui::FontId::proportional(12.0)),
+                                    );
+                                    let current = settings.widget_size;
+                                    if ui
+                                        .selectable_label(current == WidgetSize::Small, "小")
+                                        .clicked()
+                                    {
+                                        settings.widget_size = WidgetSize::Small;
+                                    }
+                                    if ui
+                                        .selectable_label(current == WidgetSize::Medium, "中")
+                                        .clicked()
+                                    {
+                                        settings.widget_size = WidgetSize::Medium;
+                                    }
+                                    if ui
+                                        .selectable_label(current == WidgetSize::Large, "大")
+                                        .clicked()
+                                    {
+                                        settings.widget_size = WidgetSize::Large;
+                                    }
+                                });
+                                ui.add_space(6.0);
+                                if ui
+                                    .checkbox(
+                                        &mut settings.show_percentage,
+                                        "显示百分比数字",
+                                    )
+                                    .changed()
+                                {
+                                }
+                            });
+
+                            // ── 其他 ──
+                            section(ui, "⚙ 其他", &mut |ui| {
+                                if ui
+                                    .checkbox(&mut settings.auto_start, "开机自启")
+                                    .changed()
+                                {
+                                }
+                            });
+                        } else {
+                            // ── Cookie ──
+                            section(ui, "🔑 凭证", &mut |ui| {
                                 ui.label(
-                                    egui::RichText::new("区域代码")
+                                    egui::RichText::new("Cookie")
                                         .color(text_muted)
                                         .font(egui::FontId::proportional(12.0)),
                                 );
-                                let region_before = settings.region.clone();
                                 ui.add_sized(
-                                    egui::vec2(160.0, 20.0),
-                                    egui::TextEdit::singleline(&mut settings.region),
+                                    egui::vec2(ui.available_width(), 80.0),
+                                    egui::TextEdit::multiline(&mut settings.cookie)
+                                        .hint_text("粘贴浏览器 Cookie..."),
                                 );
-                                if settings.region != region_before {
-                                    needs_save = true;
-                                }
+                                ui.add_space(8.0);
                                 ui.label(
-                                    egui::RichText::new("  例如: openai")
-                                        .color(text_muted)
-                                        .font(egui::FontId::proportional(11.0)),
-                                );
-                            });
-                        });
-
-                        // ── 刷新 ──
-                        section(ui, "🔄 刷新", &mut |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new("刷新间隔")
+                                    egui::RichText::new("CSRF Token")
                                         .color(text_muted)
                                         .font(egui::FontId::proportional(12.0)),
                                 );
-                                let mut secs = settings.refresh_interval_secs;
-                                if secs < 30 {
-                                    secs = 30;
-                                }
-                                if ui
-                                    .add(
-                                        egui::DragValue::new(&mut secs)
-                                            .range(30..=3600)
-                                            .suffix(" 秒"),
+                                ui.add_sized(
+                                    egui::vec2(ui.available_width(), 20.0),
+                                    egui::TextEdit::singleline(&mut settings.csrf_token)
+                                        .hint_text("粘贴 CSRF Token..."),
+                                );
+                            });
+
+                            // ── 打开控制台 ──
+                            ui.add_space(4.0);
+                            ui.with_layout(
+                                egui::Layout::top_down_justified(egui::Align::Center),
+                                |ui| {
+                                    let btn = egui::Button::new(
+                                        egui::RichText::new("🌐 打开控制台")
+                                            .color(Color32::WHITE)
+                                            .font(egui::FontId::proportional(14.0)),
                                     )
-                                    .changed()
-                                {
-                                    settings.refresh_interval_secs = secs;
-                                    needs_save = true;
-                                }
-                            });
-                        });
-
-                        // ── 通知 ──
-                        section(ui, "🔔 通知", &mut |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new("用量阈值")
-                                        .color(text_muted)
-                                        .font(egui::FontId::proportional(12.0)),
-                                );
-                                let mut threshold = settings.notification_threshold;
-                                if ui
-                                    .add(
-                                        egui::DragValue::new(&mut threshold)
-                                            .range(0.0..=100.0)
-                                            .speed(1.0)
-                                            .suffix(" %"),
-                                    )
-                                    .changed()
-                                {
-                                    settings.notification_threshold = threshold;
-                                    needs_save = true;
-                                }
-                            });
-                            if settings.notification_threshold <= 0.0 {
-                                ui.label(
-                                    egui::RichText::new("设为 0 可禁用通知")
-                                        .color(text_muted)
-                                        .font(egui::FontId::proportional(11.0)),
-                                );
-                            }
-                        });
-
-                        // ── 外观 ──
-                        section(ui, "🎨 外观", &mut |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new("主题")
-                                        .color(text_muted)
-                                        .font(egui::FontId::proportional(12.0)),
-                                );
-                                let is_dark = matches!(settings.theme, Theme::Dark);
-                                if ui.selectable_label(is_dark, "🌙 暗色").clicked() {
-                                    settings.theme = Theme::Dark;
-                                    needs_save = true;
-                                }
-                                if ui.selectable_label(!is_dark, "☀️ 亮色").clicked() {
-                                    settings.theme = Theme::Light;
-                                    needs_save = true;
-                                }
-                            });
-                            ui.add_space(6.0);
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new("窗口大小")
-                                        .color(text_muted)
-                                        .font(egui::FontId::proportional(12.0)),
-                                );
-                                let current = settings.widget_size;
-                                if ui
-                                    .selectable_label(current == WidgetSize::Small, "小")
-                                    .clicked()
-                                {
-                                    settings.widget_size = WidgetSize::Small;
-                                    needs_save = true;
-                                }
-                                if ui
-                                    .selectable_label(current == WidgetSize::Medium, "中")
-                                    .clicked()
-                                {
-                                    settings.widget_size = WidgetSize::Medium;
-                                    needs_save = true;
-                                }
-                                if ui
-                                    .selectable_label(current == WidgetSize::Large, "大")
-                                    .clicked()
-                                {
-                                    settings.widget_size = WidgetSize::Large;
-                                    needs_save = true;
-                                }
-                            });
-                        });
-
-                        // ── 其他 ──
-                        section(ui, "⚙ 其他", &mut |ui| {
-                            if ui
-                                .checkbox(&mut settings.auto_start, "开机自启")
-                                .changed()
-                            {
-                                needs_save = true;
-                            }
-                            if ui
-                                .checkbox(
-                                    &mut settings.show_percentage,
-                                    "显示百分比数字",
-                                )
-                                .changed()
-                            {
-                                needs_save = true;
-                            }
-                        });
+                                    .fill(accent)
+                                    .corner_radius(egui::CornerRadius::same(6))
+                                    .min_size(egui::vec2(160.0, 36.0));
+                                    if ui.add(btn).clicked() {
+                                        let url = console_url(&settings.region);
+                                        open_url(&url);
+                                    }
+                                },
+                            );
+                        }
 
                         // ── 保存按钮 ──
                         ui.add_space(4.0);
                         ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
+                            egui::Layout::top_down_justified(egui::Align::Center),
                             |ui| {
                                 let btn = egui::Button::new(
                                     egui::RichText::new("  保存并关闭  ")
@@ -1116,20 +1227,13 @@ impl WidgetApp {
                                     #[cfg(windows)]
                                     apply_auto_start(settings.auto_start);
                                     *notif = false;
+                                    *saved = true;
                                     *show = false;
                                 }
                             },
                         );
                     });
             });
-
-        // Save on every change
-        if needs_save {
-            debug_log!("Settings: auto-saving changes");
-            settings.save();
-            #[cfg(windows)]
-            apply_auto_start(settings.auto_start);
-        }
     }
 }
 

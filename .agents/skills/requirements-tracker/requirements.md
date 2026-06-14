@@ -64,8 +64,11 @@
 - [x] 点击 OS 关闭按钮返回 widget 模式而非退出应用
 - [x] 深色主题 UI
 - [x] 配置项：Cookie、CSRF Token、区域代码、刷新间隔、通知阈值、主题、窗口大小、开机自启、显示百分比
-- [x] 保存按钮和自动保存
-- [x] X 按钮关闭设置
+- [x] 保存按钮（手动保存，无自动保存）
+- [x] X 按钮关闭设置（有未保存更改时弹出确认对话框：保存并退出 / 不保存）
+- [x] 设置面板分为两个签页：通用（区域/刷新/通知/外观/其他）和 Cookie（Cookie/CSRF Token）
+- [x] 外观设置（主题、窗口大小、显示百分比）实时同步到 widget
+- [x] 点击 widget 图标打开设置面板
 
 ### Implementation Notes
 - `src/main.rs`: render_settings_viewport(), update() 中的设置模式切换
