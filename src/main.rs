@@ -322,6 +322,12 @@ struct WidgetApp {
     pending_result: Option<RefreshResult>,
     /// Whether the hover tooltip is currently visible (window expanded).
     tooltip_expanded: bool,
+    /// Shared state for the settings viewport (Rc<RefCell<>> so it persists across frames).
+    #[cfg(windows)]
+    settings_viewport_data: Option<(
+        std::rc::Rc<std::cell::RefCell<Settings>>,
+        std::rc::Rc<std::cell::Cell<bool>>,
+    )>,
 }
 
 impl WidgetApp {
@@ -347,6 +353,8 @@ impl WidgetApp {
             refresh_in_progress: false,
             pending_result: None,
             tooltip_expanded: false,
+            #[cfg(windows)]
+            settings_viewport_data: None,
         }
     }
 
@@ -490,7 +498,6 @@ impl eframe::App for WidgetApp {
             unsafe {
                 gl.clear_color(0.0, 0.0, 0.0, 0.0);
                 gl.clear(eframe::glow::COLOR_BUFFER_BIT);
-                // Check for OpenGL errors after clear
                 let err = gl.get_error();
                 if err != 0 {
                     debug_log!("OpenGL error after clear: {}", err);
@@ -498,7 +505,6 @@ impl eframe::App for WidgetApp {
             }
         }
 
-        // Debug: check if framebuffer has alpha channel
         #[cfg(windows)]
         if !self.color_key_applied {
             if let Some(gl) = frame.gl() {
@@ -514,7 +520,6 @@ impl eframe::App for WidgetApp {
             self.color_key_applied = true;
         }
 
-        // Track frame count for debugging
         {
             self.frame_count += 1;
             if self.frame_count % 60 == 0 {
@@ -522,19 +527,14 @@ impl eframe::App for WidgetApp {
             }
         }
 
-        // ── Check for completed background refresh ──
-        // This must happen early so results are available for rendering.
         if self.check_refresh_result() {
             ctx.request_repaint();
         }
 
-        // While a refresh is in progress, request frequent repaints so we
-        // poll the background thread result promptly.
         if self.refresh_in_progress {
             ctx.request_repaint();
         }
 
-        // Animation: smoothly lerp animated_percent toward target
         let target = self.get_monthly_percent().unwrap_or(0.0);
         let speed = 0.12;
         self.animated_percent += (target - self.animated_percent) * speed;
@@ -542,101 +542,47 @@ impl eframe::App for WidgetApp {
             self.animated_percent = target;
         }
 
-        // ── Check tray events FIRST so show_settings is set before the
-        //     settings open/close handler runs ──
+        // ── Settings viewport (separate popup window) ──
         #[cfg(windows)]
         {
             if tray::tray::SETTINGS_REQUESTED.swap(false, std::sync::atomic::Ordering::SeqCst) {
                 debug_log!("Tray: settings requested");
-                self.show_settings = true;
-            }
-            match tray::tray::check_events() {
-                Some(tray::tray::TrayCommand::Refresh) => {
-                    debug_log!("Tray: refresh requested");
-                    self.start_refresh();
+                if !self.show_settings {
+                    self.show_settings = true;
                 }
-                None => {}
-            }
-        }
-
-        // Dynamic window sizing
-        let current_size = self.settings.widget_size;
-        if current_size != self.last_widget_size {
-            debug_log!(
-                "Widget size changed: {:?} -> {:?}",
-                self.last_widget_size,
-                current_size
-            );
-            self.last_widget_size = current_size;
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(current_size.window_size()));
-        }
-
-        // Theme visuals for widget (always use widget theme)
-        let colors = self.settings.theme.colors();
-        let mut visuals = ctx.style().visuals.clone();
-        visuals.panel_fill = colors.bg_fill;
-        visuals.window_fill = Color32::from_rgb(0, 255, 255);
-        visuals.faint_bg_color = Color32::TRANSPARENT;
-        visuals.extreme_bg_color = Color32::TRANSPARENT;
-        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, colors.widget_fg);
-        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, colors.widget_fg);
-        ctx.set_visuals(visuals);
-
-        // Periodic refresh (non-blocking: spawns background thread)
-        if self.needs_periodic_refresh() {
-            debug_log!(
-                "Periodic refresh triggered (elapsed: {}s)",
-                self.last_refresh.elapsed().as_secs()
-            );
-            self.start_refresh();
-        }
-
-        // Repaint: every frame during animation or refresh, otherwise every second
-        if (self.animated_percent - target).abs() > 0.05 {
-            ctx.request_repaint();
-        } else if !self.refresh_in_progress {
-            ctx.request_repaint_after(Duration::from_secs(1));
-        }
-
-        // ── Settings viewport (separate OS window via immediate viewport) ──
-        if self.show_settings {
-            let settings_viewport_id = egui::ViewportId::from_hash_of("settings");
-            let settings_size = egui::vec2(640.0, 720.0);
-
-            let center_pos = ctx.input(|i| {
-                i.viewport().monitor_size.map(|ms| {
-                    egui::pos2(
-                        ((ms.x - settings_size.x) / 2.0).max(0.0),
-                        ((ms.y - settings_size.y) / 2.0).max(0.0),
-                    )
-                })
-            });
-
-            let mut viewport_builder = egui::ViewportBuilder::default()
-                .with_title("⚙ 设置")
-                .with_inner_size(settings_size)
-                .with_resizable(false);
-
-            if let Some(pos) = center_pos {
-                viewport_builder = viewport_builder.with_position(pos);
             }
 
-            // Clone settings so the immediate viewport can mutate them independently
-            let mut settings_clone = self.settings.clone();
-            let mut show = true;
-            let mut notif = self.notification_sent;
+            if self.show_settings {
+                // Initialize shared state on first frame
+                if self.settings_viewport_data.is_none() {
+                    let settings_rc = std::rc::Rc::new(std::cell::RefCell::new(
+                        self.settings.clone(),
+                    ));
+                    let notif_rc =
+                        std::rc::Rc::new(std::cell::Cell::new(self.notification_sent));
+                    self.settings_viewport_data = Some((settings_rc, notif_rc));
+                }
 
-            ctx.show_viewport_immediate(
-                settings_viewport_id,
-                viewport_builder,
-                |ctx, class| {
-                    if class == egui::ViewportClass::Immediate {
-                        // Check if user closed the viewport via OS close button
+                if let Some((ref settings_rc, ref notif_rc)) = self.settings_viewport_data {
+                    let viewport_id = egui::ViewportId::from_hash_of("settings");
+                    let builder = egui::ViewportBuilder::default()
+                        .with_title("⚙ 设置")
+                        .with_inner_size([640.0, 720.0])
+                        .with_resizable(false);
+
+                    let s = settings_rc.clone();
+                    let n = notif_rc.clone();
+                    let should_close = std::rc::Rc::new(std::cell::Cell::new(false));
+                    let sc = should_close.clone();
+
+                    ctx.show_viewport_immediate(viewport_id, builder, move |ctx, _class| {
+                        // Handle OS close button
                         if ctx.input(|i| i.viewport().close_requested()) {
-                            show = false;
+                            sc.set(true);
                             return;
                         }
-                        // Set dark theme for settings viewport
+
+                        // Set dark theme
                         let mut visuals = egui::Visuals::dark();
                         visuals.panel_fill = Color32::from_rgb(0x1E, 0x1E, 0x22);
                         visuals.window_fill = Color32::from_rgb(0x25, 0x25, 0x28);
@@ -659,31 +605,83 @@ impl eframe::App for WidgetApp {
                             Stroke::new(1.0, Color32::WHITE);
                         ctx.set_visuals(visuals);
 
-                        // Render settings UI
-                        Self::render_settings_viewport(
+                        let mut show = true;
+                        let mut notif_val = n.get();
+                        WidgetApp::render_settings_viewport(
                             ctx,
-                            &mut settings_clone,
+                            &mut s.borrow_mut(),
                             &mut show,
-                            &mut notif,
+                            &mut notif_val,
                         );
-                    }
-                },
-            );
+                        n.set(notif_val);
 
-            // Apply changes back from the settings viewport
-            self.settings = settings_clone;
-            if !show {
-                debug_log!("Settings: closed via viewport");
-                self.show_settings = false;
-                self.notification_sent = notif;
-                #[cfg(windows)]
-                apply_auto_start(self.settings.auto_start);
-                self.start_refresh();
+                        if !show {
+                            sc.set(true);
+                        }
+
+                        ctx.request_repaint();
+                    });
+
+                    if should_close.get() {
+                        debug_log!("Settings: closed");
+                        self.settings = settings_rc.borrow().clone();
+                        self.notification_sent = notif_rc.get();
+                        self.settings.save();
+                        apply_auto_start(self.settings.auto_start);
+                        self.show_settings = false;
+                        self.settings_viewport_data = None;
+                        self.start_refresh();
+                    }
+                }
+            }
+
+            match tray::tray::check_events() {
+                Some(tray::tray::TrayCommand::Refresh) => {
+                    debug_log!("Tray: refresh requested");
+                    self.start_refresh();
+                }
+                None => {}
             }
         }
 
+        // Dynamic window sizing
+        let current_size = self.settings.widget_size;
+        if current_size != self.last_widget_size {
+            debug_log!(
+                "Widget size changed: {:?} -> {:?}",
+                self.last_widget_size,
+                current_size
+            );
+            self.last_widget_size = current_size;
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(current_size.window_size()));
+        }
+
+        // Theme visuals for widget
+        let colors = self.settings.theme.colors();
+        let mut visuals = ctx.style().visuals.clone();
+        visuals.panel_fill = colors.bg_fill;
+        visuals.window_fill = Color32::from_rgb(0, 255, 255);
+        visuals.faint_bg_color = Color32::TRANSPARENT;
+        visuals.extreme_bg_color = Color32::TRANSPARENT;
+        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, colors.widget_fg);
+        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, colors.widget_fg);
+        ctx.set_visuals(visuals);
+
+        if self.needs_periodic_refresh() {
+            debug_log!(
+                "Periodic refresh triggered (elapsed: {}s)",
+                self.last_refresh.elapsed().as_secs()
+            );
+            self.start_refresh();
+        }
+
+        if (self.animated_percent - target).abs() > 0.05 {
+            ctx.request_repaint();
+        } else if !self.refresh_in_progress {
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
+
         // ── Widget rendering ──
-        // ── Input handling (read early for tooltip sizing) ──
         let (pointer_pos, button_down, button_clicked, viewport_rect) = ctx.input(|i| {
             (
                 i.pointer.interact_pos(),
@@ -693,20 +691,16 @@ impl eframe::App for WidgetApp {
             )
         });
 
-        // ── Direct rendering (no panel, fully transparent background) ──
         let widget_size = self.settings.widget_size.window_size();
         let cfg = self.settings.widget_size.config();
         let radius = cfg.circle_radius;
         let center = egui::pos2(2.0 + radius + cfg.stroke_width / 2.0, widget_size.y / 2.0);
 
-        // Only the circle area responds to hover/drag, not the transparent area
         let circle_hovered = pointer_pos.map_or(false, |pos| pos.distance(center) <= radius);
 
-        // Determine if tooltip should be shown (suppress while dragging)
         let show_tooltip =
             circle_hovered && !self.is_dragging && self.usage.as_ref().map_or(false, |u| !u.is_empty());
 
-        // Calculate tooltip height
         let tooltip_height = if show_tooltip {
             let lines = self.usage.as_ref().map_or(0, |u| u.len());
             lines as f32 * 18.0 + 16.0
@@ -714,16 +708,13 @@ impl eframe::App for WidgetApp {
             0.0
         };
 
-        // Handle window expansion for tooltip (only when settings is not open)
-        if !self.show_settings {
-            if show_tooltip != self.tooltip_expanded {
-                self.tooltip_expanded = show_tooltip;
-                let effective_h = widget_size.y + tooltip_height;
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                    widget_size.x,
-                    effective_h,
-                )));
-            }
+        if show_tooltip != self.tooltip_expanded {
+            self.tooltip_expanded = show_tooltip;
+            let effective_h = widget_size.y + tooltip_height;
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                widget_size.x,
+                effective_h,
+            )));
         }
 
         let hovered = circle_hovered;
@@ -733,10 +724,8 @@ impl eframe::App for WidgetApp {
 
         let colors = self.settings.theme.colors();
 
-        // Background circle
         painter.circle_filled(center, radius, colors.circle_bg);
 
-        // Progress arc
         let percent = self.animated_percent;
         if percent > 0.0 {
             let color = percent_color(percent);
@@ -755,11 +744,9 @@ impl eframe::App for WidgetApp {
                 fill: Color32::TRANSPARENT,
                 stroke: Stroke::new(cfg.stroke_width, color).into(),
             }));
-            // Center dot
             painter.circle_filled(center, cfg.circle_center_dot, color);
         }
 
-        // Percentage text or error
         if let Some(ref err) = self.error {
             let font_id = egui::FontId::proportional(cfg.error_font_size);
             let galley = ctx.fonts(|f| {
@@ -789,7 +776,6 @@ impl eframe::App for WidgetApp {
             }
         }
 
-        // ── Hover tooltip: draw below widget content on painter ──
         if show_tooltip {
             if let Some(ref usage) = self.usage {
                 let tooltip_y = widget_size.y + 4.0;
@@ -817,60 +803,51 @@ impl eframe::App for WidgetApp {
             }
         }
 
-        // ── Widget interactions (only when settings is not open) ──
-        if !self.show_settings {
-            // Click to open URL
-            if button_clicked && hovered {
-                let url = console_url(&self.settings.region);
-                open_url(&url);
-            }
-
-            // Custom non-blocking drag: track mouse in screen coords and move window.
-            // Only the circle area initiates a drag; once started, continue tracking
-            // even if the mouse leaves the circle (fast drag), so the effect is not lost.
-            // Uses lerp to avoid position flicker from the viewport feedback loop.
-            if button_down && (circle_hovered || self.is_dragging) {
-                if let (Some(viewport_min), Some(current_pos)) =
-                    (viewport_rect.map(|r| r.min), pointer_pos)
-                {
-                    let screen_mouse = viewport_min + current_pos.to_vec2();
-
-                    if !self.is_dragging {
-                        self.is_dragging = true;
-                        self.drag_offset = Some(screen_mouse - viewport_min);
-                    }
-
-                    if let Some(offset) = self.drag_offset {
-                        let target = screen_mouse - offset;
-                        let current = viewport_min;
-                        let lerp_factor = 0.6;
-                        let new_x = current.x + (target.x - current.x) * lerp_factor;
-                        let new_y = current.y + (target.y - current.y) * lerp_factor;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(
-                            egui::Pos2::new(new_x, new_y),
-                        ));
-                    }
-                }
-            }
-
-            if self.is_dragging && !button_down {
-                self.is_dragging = false;
-                self.drag_offset = None;
-                if let Some(rect) = viewport_rect {
-                    self.settings.window_x = Some(rect.min.x);
-                    self.settings.window_y = Some(rect.min.y);
-                    self.settings.save();
-                }
-            }
-
-            // Hover-triggered refresh (non-blocking: spawns background thread)
-            if hovered && !self.was_hovered {
-                if self.last_refresh.elapsed() >= HOVER_COOLDOWN {
-                    self.start_refresh();
-                }
-            }
-            self.was_hovered = hovered;
+        if button_clicked && hovered {
+            let url = console_url(&self.settings.region);
+            open_url(&url);
         }
+
+        if button_down && (circle_hovered || self.is_dragging) {
+            if let (Some(viewport_min), Some(current_pos)) =
+                (viewport_rect.map(|r| r.min), pointer_pos)
+            {
+                let screen_mouse = viewport_min + current_pos.to_vec2();
+
+                if !self.is_dragging {
+                    self.is_dragging = true;
+                    self.drag_offset = Some(screen_mouse - viewport_min);
+                }
+
+                if let Some(offset) = self.drag_offset {
+                    let target = screen_mouse - offset;
+                    let current = viewport_min;
+                    let lerp_factor = 0.6;
+                    let new_x = current.x + (target.x - current.x) * lerp_factor;
+                    let new_y = current.y + (target.y - current.y) * lerp_factor;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(
+                        egui::Pos2::new(new_x, new_y),
+                    ));
+                }
+            }
+        }
+
+        if self.is_dragging && !button_down {
+            self.is_dragging = false;
+            self.drag_offset = None;
+            if let Some(rect) = viewport_rect {
+                self.settings.window_x = Some(rect.min.x);
+                self.settings.window_y = Some(rect.min.y);
+                self.settings.save();
+            }
+        }
+
+        if hovered && !self.was_hovered {
+            if self.last_refresh.elapsed() >= HOVER_COOLDOWN {
+                self.start_refresh();
+            }
+        }
+        self.was_hovered = hovered;
     }
 }
 
@@ -884,22 +861,26 @@ impl WidgetApp {
         show: &mut bool,
         notif: &mut bool,
     ) {
-        let mut open = true;
         let mut needs_save = false;
 
         let accent = Color32::from_rgb(0x00, 0x78, 0xD4);
         let card_bg = Color32::from_rgb(0x2D, 0x2D, 0x32);
         let text_muted = Color32::from_rgb(0x99, 0x99, 0x9F);
 
-        egui::Window::new("⚙ 设置")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .default_size(egui::vec2(620.0, 680.0))
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false; 2])
-                    .show(ui, |ui| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            // Header
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("⚙ 设置")
+                    .color(Color32::WHITE)
+                    .font(egui::FontId::proportional(18.0))
+                    .strong(),
+            );
+            ui.add_space(8.0);
+
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
                         let section_gap = 12.0;
 
                         // ── Helper: draw a card-style section ──
@@ -1136,15 +1117,6 @@ impl WidgetApp {
             settings.save();
             #[cfg(windows)]
             apply_auto_start(settings.auto_start);
-        }
-        // Close via X button on the egui Window
-        if !open {
-            debug_log!("Settings: closed via X button");
-            settings.save();
-            #[cfg(windows)]
-            apply_auto_start(settings.auto_start);
-            *notif = false;
-            *show = false;
         }
     }
 }
