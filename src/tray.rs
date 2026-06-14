@@ -10,8 +10,10 @@ pub mod tray {
     };
     use windows::core::PCWSTR;
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, IsWindowVisible, ShowWindow, SW_HIDE, SW_SHOW,
+        FindWindowW, IsWindowVisible, PostMessageW, ShowWindow, SW_HIDE, SW_SHOW, WM_USER,
     };
+    use windows::Win32::Graphics::Gdi::InvalidateRect;
+    use windows::Win32::Foundation::{WPARAM, LPARAM};
 
     use crate::debug_log;
 
@@ -55,6 +57,11 @@ pub mod tray {
                     !visible
                 );
                 let _ = ShowWindow(hwnd, if visible { SW_HIDE } else { SW_SHOW });
+                if !visible {
+                    // Force a repaint and wake up the eframe event loop.
+                    let _ = InvalidateRect(hwnd, None, true);
+                    let _ = PostMessageW(hwnd, WM_USER, WPARAM(0), LPARAM(0));
+                }
             } else {
                 debug_log!("Tray: toggle visibility failed, window not found");
             }
@@ -69,6 +76,9 @@ pub mod tray {
                 if !IsWindowVisible(hwnd).as_bool() {
                     debug_log!("Tray: showing window for settings");
                     let _ = ShowWindow(hwnd, SW_SHOW);
+                    // Force a repaint and wake up the eframe event loop.
+                    let _ = InvalidateRect(hwnd, None, true);
+                    let _ = PostMessageW(hwnd, WM_USER, WPARAM(0), LPARAM(0));
                 }
             }
         }
