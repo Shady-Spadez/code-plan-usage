@@ -1,5 +1,11 @@
 use std::path::PathBuf;
 
+pub fn init_logger() {
+    // Logger is initialized via the debug_log! macro which writes
+    // directly to the log file. This function exists for explicit
+    // initialization if needed in the future.
+}
+
 pub fn log_path() -> PathBuf {
     std::env::current_exe()
         .expect("无法获取当前可执行文件路径")

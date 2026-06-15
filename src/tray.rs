@@ -1,6 +1,6 @@
 #[cfg(windows)]
 pub mod tray {
-    use std::cell::UnsafeCell;
+    use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
@@ -25,16 +25,11 @@ pub mod tray {
     static EVENT_QUEUE: std::sync::LazyLock<Mutex<VecDeque<TrayCommand>>> =
         std::sync::LazyLock::new(|| Mutex::new(VecDeque::new()));
 
-    /// Wrapper to allow storing a !Sync type (TrayIcon) in a static.
-    ///
-    /// SAFETY: All access happens on the main thread — the menu event
-    /// callback runs on the same thread that created the tray icon window.
-    struct MainThreadCell<T>(UnsafeCell<T>);
-    unsafe impl<T> Sync for MainThreadCell<T> {}
-
-    /// Stores the tray icon so it can be explicitly dropped to remove it
-    /// from the system tray before the process exits.
-    static TRAY_ICON: MainThreadCell<Option<TrayIcon>> = MainThreadCell(UnsafeCell::new(None));
+    // Stores the tray icon so it can be explicitly dropped to remove it
+    // from the system tray before the process exits.
+    thread_local! {
+        static TRAY_ICON: RefCell<Option<TrayIcon>> = RefCell::new(None);
+    }
 
     /// Flag set by the Settings menu callback; checked in the eframe update loop.
     pub static SETTINGS_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -159,10 +154,9 @@ pub mod tray {
             .build()
         {
             Ok(tray) => {
-                // SAFETY: init_tray is called from main before the event
-                // loop starts, so no concurrent access is possible.
-                let tray_icon = unsafe { &mut *TRAY_ICON.0.get() };
-                *tray_icon = Some(tray);
+                TRAY_ICON.with(|cell| {
+                    *cell.borrow_mut() = Some(tray);
+                });
             }
             Err(e) => {
                 debug_log!("Failed to create tray icon: {:?}", e);

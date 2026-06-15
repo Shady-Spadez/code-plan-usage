@@ -224,7 +224,23 @@ fn extract_cookies_from_db(db_path: &PathBuf, key: &[u8]) -> Option<BrowserCrede
             .as_millis()
     ));
     debug_log!("Copying Cookies DB to {:?}", tmp_db);
-    std::fs::copy(db_path, &tmp_db).ok()?;
+
+    // Retry up to 3 times if copy fails (browser may have a temporary lock)
+    let mut copied = false;
+    for attempt in 0..3 {
+        if attempt > 0 {
+            debug_log!("Retry copying Cookies DB, attempt {}", attempt + 1);
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if std::fs::copy(db_path, &tmp_db).is_ok() {
+            copied = true;
+            break;
+        }
+    }
+    if !copied {
+        debug_log!("Failed to copy Cookies DB after 3 attempts");
+        return None;
+    }
 
     let conn = Connection::open(&tmp_db).ok()?;
 
