@@ -6,12 +6,16 @@ pub fn init_logger() {
     // initialization if needed in the future.
 }
 
-pub fn log_path() -> PathBuf {
+pub fn exe_dir() -> PathBuf {
     std::env::current_exe()
         .expect("无法获取当前可执行文件路径")
         .parent()
         .expect("无法获取可执行文件父目录")
-        .join("coding_plan_widget.log")
+        .to_path_buf()
+}
+
+pub fn log_path() -> PathBuf {
+    exe_dir().join("coding_plan_widget.log")
 }
 
 /// Write a timestamped message to the log file next to the exe.

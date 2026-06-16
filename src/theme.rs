@@ -101,3 +101,33 @@ pub fn percent_color(percent: f64) -> Color32 {
         Color32::from_rgb(244, 67, 54)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::Color32;
+
+    #[test]
+    fn test_percent_color_green() {
+        assert_eq!(percent_color(0.0), Color32::from_rgb(76, 175, 80));
+        assert_eq!(percent_color(49.9), Color32::from_rgb(76, 175, 80));
+    }
+
+    #[test]
+    fn test_percent_color_yellow() {
+        assert_eq!(percent_color(50.0), Color32::from_rgb(255, 193, 7));
+        assert_eq!(percent_color(79.9), Color32::from_rgb(255, 193, 7));
+    }
+
+    #[test]
+    fn test_percent_color_orange() {
+        assert_eq!(percent_color(80.0), Color32::from_rgb(255, 152, 0));
+        assert_eq!(percent_color(94.9), Color32::from_rgb(255, 152, 0));
+    }
+
+    #[test]
+    fn test_percent_color_red() {
+        assert_eq!(percent_color(95.0), Color32::from_rgb(244, 67, 54));
+        assert_eq!(percent_color(100.0), Color32::from_rgb(244, 67, 54));
+    }
+}

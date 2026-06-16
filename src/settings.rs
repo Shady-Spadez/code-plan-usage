@@ -145,9 +145,5 @@ impl Settings {
 }
 
 pub fn settings_path() -> PathBuf {
-    std::env::current_exe()
-        .expect("无法获取当前可执行文件路径")
-        .parent()
-        .expect("无法获取可执行文件父目录")
-        .join("coding_plan_settings.json")
+    crate::log::exe_dir().join("coding_plan_settings.json")
 }

@@ -138,3 +138,141 @@ pub fn fetch_usage(cookie: &str, csrf_token: &str, region: &str) -> Result<Vec<Q
 
     Err(last_error)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn test_format_level_line_session_label_empty() {
+        let now = Utc::now().timestamp();
+        let level = QuotaLevel {
+            level: "session".to_string(),
+            percent: 42.0,
+            reset_timestamp: now + 3600,
+        };
+        let (label, _countdown) = format_level_line(&level);
+        assert_eq!(label, "");
+    }
+
+    #[test]
+    fn test_format_level_line_weekly_label() {
+        let now = Utc::now().timestamp();
+        let level = QuotaLevel {
+            level: "weekly".to_string(),
+            percent: 42.0,
+            reset_timestamp: now + 3600,
+        };
+        let (label, _countdown) = format_level_line(&level);
+        assert_eq!(label, "近1周");
+    }
+
+    #[test]
+    fn test_format_level_line_monthly_label() {
+        let now = Utc::now().timestamp();
+        let level = QuotaLevel {
+            level: "monthly".to_string(),
+            percent: 42.0,
+            reset_timestamp: now + 3600,
+        };
+        let (label, _countdown) = format_level_line(&level);
+        assert_eq!(label, "近1月");
+    }
+
+    #[test]
+    fn test_format_level_line_countdown_format() {
+        let now = Utc::now().timestamp();
+        let reset = now + 86400 + 7200 + 180;
+        let level = QuotaLevel {
+            level: "session".to_string(),
+            percent: 42.0,
+            reset_timestamp: reset,
+        };
+        let (_label, countdown) = format_level_line(&level);
+        assert!(countdown.contains("1天"));
+        assert!(countdown.contains("02时"));
+        assert!(countdown.contains("03分"));
+    }
+
+    #[test]
+    fn test_format_level_line_future_timestamp() {
+        let now = Utc::now().timestamp();
+        let reset = now + 3600;
+        let level = QuotaLevel {
+            level: "session".to_string(),
+            percent: 42.0,
+            reset_timestamp: reset,
+        };
+        let (_label, countdown) = format_level_line(&level);
+        assert!(!countdown.is_empty());
+    }
+
+    #[test]
+    fn test_format_level_line_millisecond_timestamp() {
+        let now = Utc::now().timestamp();
+        let reset_ms = (now + 3600) * 1000;
+        let level = QuotaLevel {
+            level: "session".to_string(),
+            percent: 42.0,
+            reset_timestamp: reset_ms,
+        };
+        let (_label, countdown) = format_level_line(&level);
+        assert!(countdown.contains("01时00分"));
+    }
+
+    #[test]
+    fn test_format_level_line_expired_timestamp() {
+        let now = Utc::now().timestamp();
+        let level = QuotaLevel {
+            level: "session".to_string(),
+            percent: 42.0,
+            reset_timestamp: now - 3600,
+        };
+        let (_label, countdown) = format_level_line(&level);
+        assert!(countdown.contains("00时00分"));
+    }
+
+    #[test]
+    fn test_api_response_deserialization() {
+        let json = r#"{
+            "Result": {
+                "Status": "Running",
+                "QuotaUsage": [
+                    {
+                        "Level": "session",
+                        "Percent": 42.5,
+                        "ResetTimestamp": 1700000000
+                    },
+                    {
+                        "Level": "weekly",
+                        "Percent": 65.0,
+                        "ResetTimestamp": 1700086400
+                    },
+                    {
+                        "Level": "monthly",
+                        "Percent": 88.3,
+                        "ResetTimestamp": 1704067200
+                    }
+                ]
+            }
+        }"#;
+
+        let api_response: ApiResponse = serde_json::from_str(json).expect("should parse");
+        assert_eq!(api_response.result.status, "Running");
+        assert_eq!(api_response.result.quota_usage.len(), 3);
+
+        let session = &api_response.result.quota_usage[0];
+        assert_eq!(session.level, "session");
+        assert_eq!(session.percent, 42.5);
+        assert_eq!(session.reset_timestamp, 1700000000);
+
+        let weekly = &api_response.result.quota_usage[1];
+        assert_eq!(weekly.level, "weekly");
+        assert_eq!(weekly.percent, 65.0);
+
+        let monthly = &api_response.result.quota_usage[2];
+        assert_eq!(monthly.level, "monthly");
+        assert_eq!(monthly.percent, 88.3);
+    }
+}

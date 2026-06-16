@@ -44,7 +44,19 @@ cargo build --release
 
 ## 设置
 
-右键悬浮窗 → 设置，可配置：Cookie/CSRF Token、区域、刷新间隔、通知阈值、主题、窗口尺寸、开机自启、显示百分比。
+右键悬浮窗 → 设置，可配置：
+
+| 设置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `cookie` | string | `""` | 登录 Cookie |
+| `csrf_token` | string | `""` | CSRF Token |
+| `region` | string | `"cn-beijing"` | API 区域 |
+| `refresh_interval_secs` | number | `300` | 刷新间隔（秒） |
+| `notification_threshold` | number | `0.0` | 用量通知阈值（0 关闭） |
+| `theme` | string | `"Dark"` | 主题：`Dark` / `Light` |
+| `widget_size` | string | `"Medium"` | 尺寸：`Small` / `Medium` / `Large` |
+| `auto_start` | bool | `false` | 开机自启 |
+| `show_percentage` | bool | `false` | 是否显示百分比数字 |
 
 ## 技术栈
 
