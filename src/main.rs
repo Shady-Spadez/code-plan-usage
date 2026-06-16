@@ -1,13 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod browser_cookies;
-mod log;
-mod theme;
 mod api;
+mod log;
 mod settings;
-mod widget;
+mod theme;
 #[cfg(windows)]
 mod tray;
+mod webview_login;
+mod widget;
 
 use eframe::egui;
 use std::time::Duration;
@@ -40,27 +40,15 @@ fn show_usage_notification(percent: f64, threshold: f64) {
 #[cfg(not(windows))]
 fn show_usage_notification(_percent: f64, _threshold: f64) {}
 
-// ── URL Opener ───────────────────────────────────────────────────────────────
+// ── URL opener ────────────────────────────────────────────────────────────────
 
-fn open_url(url: &str) {
+pub fn open_url(url: &str) {
     debug_log!("Opening URL: {}", url);
     #[cfg(target_os = "windows")]
     {
-        use windows::core::PCWSTR;
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        use windows::Win32::UI::WindowsAndMessaging::SW_SHOW;
-
-        let url_wide: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
-        unsafe {
-            ShellExecuteW(
-                None,
-                PCWSTR::null(),
-                PCWSTR::from_raw(url_wide.as_ptr()),
-                PCWSTR::null(),
-                PCWSTR::null(),
-                SW_SHOW,
-            );
-        }
+        let _ = std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", url])
+            .spawn();
     }
     #[cfg(target_os = "macos")]
     {
@@ -78,8 +66,8 @@ fn open_url(url: &str) {
 fn apply_auto_start(enabled: bool) {
     use windows::core::HSTRING;
     use windows::Win32::System::Registry::{
-        RegCreateKeyExW, RegSetValueExW, RegDeleteValueW, RegCloseKey,
-        HKEY_CURRENT_USER, REG_SZ, REG_OPTION_NON_VOLATILE, KEY_WRITE, KEY_SET_VALUE,
+        RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegSetValueExW, HKEY_CURRENT_USER,
+        KEY_SET_VALUE, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ,
     };
 
     let exe_path = match std::env::current_exe() {
@@ -88,9 +76,7 @@ fn apply_auto_start(enabled: bool) {
     };
     let exe_path_str = exe_path.to_string_lossy();
 
-    let sub_key = HSTRING::from(
-        r"Software\Microsoft\Windows\CurrentVersion\Run",
-    );
+    let sub_key = HSTRING::from(r"Software\Microsoft\Windows\CurrentVersion\Run");
     let value_name = HSTRING::from("CodingPlanWidget");
 
     unsafe {
@@ -107,7 +93,9 @@ fn apply_auto_start(enabled: bool) {
                 None,
                 &mut hkey,
                 None,
-            ).is_ok() {
+            )
+            .is_ok()
+            {
                 let data = HSTRING::from(exe_path_str.as_ref());
                 let bytes = data.as_wide();
                 let _ = RegSetValueExW(
@@ -135,7 +123,9 @@ fn apply_auto_start(enabled: bool) {
                 None,
                 &mut hkey,
                 None,
-            ).is_ok() {
+            )
+            .is_ok()
+            {
                 let _ = RegDeleteValueW(hkey, &value_name);
                 let _ = RegCloseKey(hkey);
             }
@@ -224,7 +214,7 @@ fn setup_cjk_font(_ctx: &egui::Context) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{ApiResponse, QuotaLevel, format_level_line};
+    use crate::api::{format_level_line, ApiResponse, QuotaLevel};
     use crate::theme::percent_color;
     use chrono::Utc;
     use egui::Color32;

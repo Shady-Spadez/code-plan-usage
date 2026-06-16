@@ -17,13 +17,17 @@ Activate this skill whenever:
 
 ## Instructions
 
-### 1. Read the Requirements Document First
+### 1. Read the Requirements and Features Documents First
 
-At the start of every conversation where this skill is activated, read the requirements document:
+At the start of every conversation where this skill is activated, read both documents:
 
 ```
 .agents/skills/requirements-tracker/requirements.md
+.agents/skills/requirements-tracker/features.md
 ```
+
+- `requirements.md` — the living document with all features, statuses, and acceptance criteria
+- `features.md` — the stable document listing verified, implemented features
 
 This gives you a complete picture of all previously recorded requirements and ensures you don't accidentally break anything.
 
@@ -51,7 +55,7 @@ When the user describes a specific feature, behavior, or functional requirement,
 ### 3. Check Before Implementing
 
 Before making any code changes:
-1. Read the full `requirements.md`
+1. Read the full `requirements.md` and `features.md`
 2. Identify which existing requirements could be affected by your changes
 3. Explicitly state in your response: "I've reviewed the requirements and these existing features could be affected: [list]"
 4. After implementing, verify that existing features still work as described

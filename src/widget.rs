@@ -6,11 +6,11 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use eframe::glow::HasContext as _;
 
-use crate::api::{console_url, fetch_usage, format_level_line, QuotaLevel};
+use crate::api::{fetch_usage, format_level_line, QuotaLevel};
 use crate::debug_log;
 use crate::settings::Settings;
 use crate::theme::{percent_color, Theme, WidgetSize};
-use crate::{DEFAULT_REFRESH_INTERVAL, HOVER_COOLDOWN, open_url, show_usage_notification};
+use crate::{DEFAULT_REFRESH_INTERVAL, HOVER_COOLDOWN, show_usage_notification};
 
 #[cfg(windows)]
 use crate::apply_auto_start;
@@ -27,6 +27,7 @@ pub struct SettingsViewportState {
     pub tab_index: std::rc::Rc<std::cell::Cell<usize>>,
     pub original_settings: std::rc::Rc<std::cell::RefCell<Settings>>,
     pub confirm_dialog: std::rc::Rc<std::cell::Cell<bool>>,
+    pub webview_receiver: std::rc::Rc<std::cell::RefCell<Option<std::sync::mpsc::Receiver<Option<crate::webview_login::BrowserCredentials>>>>>,
 }
 
 pub struct WidgetApp {
@@ -316,12 +317,14 @@ impl eframe::App for WidgetApp {
                         self.settings.clone(),
                     ));
                     let confirm_rc = std::rc::Rc::new(std::cell::Cell::new(false));
+                    let webview_receiver_rc = std::rc::Rc::new(std::cell::RefCell::new(None));
                     self.settings_viewport_data = Some(SettingsViewportState {
                         settings: settings_rc,
                         notification_sent: notif_rc,
                         tab_index: tab_rc,
                         original_settings: orig_rc,
                         confirm_dialog: confirm_rc,
+                        webview_receiver: webview_receiver_rc,
                     });
                 }
 
@@ -345,14 +348,18 @@ impl eframe::App for WidgetApp {
                     ctx.show_viewport_immediate(viewport_id, builder, move |ctx, _class| {
                         // Handle OS close button
                         if ctx.input(|i| i.viewport().close_requested()) {
-                            let current = s.borrow();
-                            let original = o.borrow();
-                            if *current != *original {
-                                cf.set(true);
-                            } else {
+                            if cf.get() {
+                                // Already showing confirmation dialog - force close
                                 sc.set(true);
+                            } else {
+                                let current = s.borrow();
+                                let original = o.borrow();
+                                if *current != *original {
+                                    cf.set(true);
+                                } else {
+                                    sc.set(true);
+                                }
                             }
-                            return;
                         }
 
                         // Set dark theme
@@ -431,29 +438,50 @@ impl eframe::App for WidgetApp {
                                 });
                             });
                         } else {
-                            let mut show = true;
                             let mut notif_val = n.get();
                             let mut tab_val = t.get();
                             let mut saved_val = sv.get();
+                            let mut close_req = false;
                             WidgetApp::render_settings_viewport(
                                 ctx,
                                 &mut s.borrow_mut(),
-                                &mut show,
                                 &mut notif_val,
                                 &mut tab_val,
                                 &mut saved_val,
+                                &mut close_req,
+                                &state.webview_receiver,
                             );
                             n.set(notif_val);
                             t.set(tab_val);
                             sv.set(saved_val);
-
-                            if !show {
+                            if close_req {
                                 sc.set(true);
                             }
                         }
 
                         ctx.request_repaint();
                     });
+
+                    // Poll webview login result
+                    {
+                        let mut rx_opt = state.webview_receiver.borrow_mut();
+                        if let Some(ref rx) = *rx_opt {
+                            if let Ok(result) = rx.try_recv() {
+                                if let Some(creds) = result {
+                                    debug_log!("WebView2: credentials received, updating settings");
+                                    let mut s = state.settings.borrow_mut();
+                                    s.cookie = creds.cookie;
+                                    s.csrf_token = creds.csrf_token;
+                                    s.save();
+                                    saved.set(true);
+                                    should_close.set(true);
+                                } else {
+                                    debug_log!("WebView2: login window closed without credentials");
+                                }
+                                *rx_opt = None;
+                            }
+                        }
+                    }
 
                     if should_close.get() {
                         debug_log!("Settings: closed");
@@ -701,10 +729,11 @@ impl WidgetApp {
     pub fn render_settings_viewport(
         ctx: &egui::Context,
         settings: &mut Settings,
-        show: &mut bool,
         notif: &mut bool,
         tab: &mut usize,
         saved: &mut bool,
+        close_requested: &mut bool,
+        webview_receiver: &std::rc::Rc<std::cell::RefCell<Option<std::sync::mpsc::Receiver<Option<crate::webview_login::BrowserCredentials>>>>>,
     ) {
         let accent = Color32::from_rgb(0x00, 0x78, 0xD4);
         let card_bg = Color32::from_rgb(0x2D, 0x2D, 0x32);
@@ -938,8 +967,35 @@ impl WidgetApp {
                                     .corner_radius(egui::CornerRadius::same(6))
                                     .min_size(egui::vec2(160.0, 36.0));
                                     if ui.add(btn).clicked() {
-                                        let url = console_url(&settings.region);
-                                        open_url(&url);
+                                        if webview_receiver.borrow().is_none() {
+                                            debug_log!("Settings: open console (WebView2 login) clicked");
+                                            let rx = crate::webview_login::try_extract_credentials();
+                                            webview_receiver.borrow_mut().replace(rx);
+                                        }
+                                    }
+                                },
+                            );
+
+                            // ── 清理 Cookie ──
+                            ui.add_space(4.0);
+                            ui.with_layout(
+                                egui::Layout::top_down_justified(egui::Align::Center),
+                                |ui| {
+                                    let btn = egui::Button::new(
+                                        egui::RichText::new("🗑 清理 Cookie")
+                                            .color(Color32::WHITE)
+                                            .font(egui::FontId::proportional(14.0)),
+                                    )
+                                    .fill(Color32::from_rgb(0xD4, 0x3F, 0x3F))
+                                    .corner_radius(egui::CornerRadius::same(6))
+                                    .min_size(egui::vec2(160.0, 36.0));
+                                    if ui.add(btn).clicked() {
+                                        debug_log!("Settings: clear cookie clicked");
+                                        settings.cookie.clear();
+                                        settings.csrf_token.clear();
+                                        settings.save();
+                                        *saved = true;
+                                        crate::webview_login::clear_webview_cookies();
                                     }
                                 },
                             );
@@ -965,7 +1021,7 @@ impl WidgetApp {
                                     apply_auto_start(settings.auto_start);
                                     *notif = false;
                                     *saved = true;
-                                    *show = false;
+                                    *close_requested = true;
                                 }
                             },
                         );

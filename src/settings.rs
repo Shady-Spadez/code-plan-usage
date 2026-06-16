@@ -69,12 +69,8 @@ impl Settings {
         // If credentials are missing, try to extract from browser or cookie file.
         // Merge only the credential fields — don't overwrite other settings.
         if !settings.is_configured() {
-            if let Some(creds) = crate::browser_cookies::try_extract_credentials() {
-                debug_log!("Settings::load: extracted credentials from browser");
-                settings.cookie = creds.cookie;
-                settings.csrf_token = creds.csrf_token;
-                settings.save();
-            } else if let Some(cookie_settings) = Self::try_load_from_cookie_file() {
+            // Cookie file (Netscape format) — non-blocking fallback
+            if let Some(cookie_settings) = Self::try_load_from_cookie_file() {
                 debug_log!("Settings::load: loaded credentials from cookie file");
                 settings.cookie = cookie_settings.cookie;
                 settings.csrf_token = cookie_settings.csrf_token;

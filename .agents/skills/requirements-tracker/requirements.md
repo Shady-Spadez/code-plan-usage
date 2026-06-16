@@ -227,3 +227,28 @@
 ### Implementation Notes
 - 通过 `was_in_settings_mode` 追踪模式切换
 - 模式切换时动态改变窗口装饰和大小
+
+---
+
+## 12. 未配置状态特殊样式
+
+**Date**: 2026-06-15
+**Status**: ✅ Implemented
+
+### Description
+当没有本地配置（无 Cookie/CSRF Token）时，widget 仍然显示，但使用特殊的视觉样式来区分未配置状态。
+
+### Acceptance Criteria
+- [x] 未配置时 widget 仍然显示（不隐藏）
+- [x] 圆形区域使用暗淡的背景色
+- [x] 显示虚线圆环代替实心进度条
+- [x] 圆形中心显示 "?" 图标
+- [x] 圆形右侧显示 "点击配置" 提示文字（中性色，非红色错误色）
+- [x] 点击圆形区域仍然打开设置面板
+- [x] 支持拖拽移动
+- [x] 暗色/亮色主题下均有对应的未配置配色
+
+### Implementation Notes
+- `src/widget.rs`: update() 中根据 `is_configured()` 分支渲染
+- `src/theme.rs`: ThemeColors 新增 `unconfigured_circle_bg`、`unconfigured_ring`、`unconfigured_text` 字段
+- 未配置状态下不显示悬停提示框（无用量数据）

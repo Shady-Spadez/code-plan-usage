@@ -13,7 +13,6 @@ pub enum Theme {
 
 pub struct ThemeColors {
     pub bg_fill: Color32,
-    pub text_secondary: Color32,
     pub circle_bg: Color32,
     pub widget_fg: Color32,
 }
@@ -23,13 +22,11 @@ impl Theme {
         match self {
             Theme::Dark => ThemeColors {
                 bg_fill: Color32::from_rgba_premultiplied(30, 30, 35, 240),
-                text_secondary: Color32::from_gray(150),
                 circle_bg: Color32::from_gray(50),
                 widget_fg: Color32::from_gray(220),
             },
             Theme::Light => ThemeColors {
                 bg_fill: Color32::from_rgba_premultiplied(245, 245, 250, 240),
-                text_secondary: Color32::from_gray(120),
                 circle_bg: Color32::from_gray(210),
                 widget_fg: Color32::from_gray(30),
             },
