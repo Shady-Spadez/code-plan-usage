@@ -2,6 +2,7 @@
 
 mod api;
 mod log;
+mod screen;
 mod settings;
 mod theme;
 #[cfg(windows)]

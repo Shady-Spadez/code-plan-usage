@@ -19,6 +19,29 @@ use crate::tray;
 
 // ── Widget State ─────────────────────────────────────────────────────────────
 
+/// Clamp a widget home position so the whole widget (size `ws`) stays on its
+/// monitor and off the taskbar. Horizontally the widget may touch the screen
+/// edges (uses the full monitor rect, not the work area, so it isn't kept away
+/// from the left/right edges); vertically it's clamped to the work area to
+/// avoid the taskbar. Falls back to the input position when screen info is
+/// unavailable.
+fn clamp_home_to_work_area(home: egui::Pos2, ws: egui::Vec2, ppp: f32) -> egui::Pos2 {
+    match crate::screen::screen_info_for_point(home, ppp) {
+        Some(info) => {
+            // X: full monitor (widget can touch left/right screen edges).
+            let x = home
+                .x
+                .clamp(info.monitor.min.x, (info.monitor.max.x - ws.x).max(info.monitor.min.x));
+            // Y: work area (keep off the taskbar).
+            let y = home
+                .y
+                .clamp(info.work_area.min.y, (info.work_area.max.y - ws.y).max(info.work_area.min.y));
+            egui::pos2(x, y)
+        }
+        None => home,
+    }
+}
+
 /// Shared state for the settings viewport (Rc<RefCell<>> so it persists across frames).
 #[cfg(windows)]
 pub struct SettingsViewportState {
@@ -45,14 +68,28 @@ pub struct WidgetApp {
     pub color_key_applied: bool,
     #[cfg(debug_assertions)]
     pub frame_count: u64,
-    /// Offset from window origin to mouse at drag start (for lerp-based tracking).
-    pub drag_offset: Option<egui::Vec2>,
+    /// Drag anchor: offset from the widget's screen position (home) to the mouse,
+    /// captured at drag start. The widget is dragged by tracking `mouse - anchor`.
+    pub drag_anchor: Option<egui::Vec2>,
+    /// Last known mouse position in screen coordinates, carried across frames.
+    /// When the window is moved by tooltip geometry (no real mouse movement),
+    /// winit does NOT emit a PointerMoved event, so the egui pointer stays stale
+    /// (relative to the old window position). We recompute mouse_screen from this
+    /// to keep hover/drag stable across window moves.
+    pub last_mouse_screen: Option<egui::Pos2>,
     /// True while a background refresh thread is running.
     pub refresh_in_progress: bool,
     /// Receiver for the background thread's result (oneshot channel).
     pub pending_result: Option<std::sync::mpsc::Receiver<Result<Vec<QuotaLevel>, String>>>,
     /// Whether the hover tooltip is currently visible (window expanded).
     pub tooltip_expanded: bool,
+    /// Widget home (screen) position captured while the tooltip is shown, so the
+    /// widget stays put even though the OS window moves/resizes for top placement.
+    pub tooltip_home: Option<egui::Pos2>,
+    /// The last OuterPosition commanded to the OS window (to skip redundant sends).
+    pub tooltip_last_pos: Option<egui::Pos2>,
+    /// Last InnerSize sent for the tooltip window, to avoid redundant viewport cmds.
+    pub tooltip_last_size: Option<egui::Vec2>,
     /// Shared state for the settings viewport.
     #[cfg(windows)]
     pub settings_viewport_data: Option<SettingsViewportState>,
@@ -82,10 +119,14 @@ impl WidgetApp {
             color_key_applied: false,
             #[cfg(debug_assertions)]
             frame_count: 0,
-            drag_offset: None,
+            drag_anchor: None,
+            last_mouse_screen: None,
             refresh_in_progress: false,
             pending_result: None,
             tooltip_expanded: false,
+            tooltip_home: None,
+            tooltip_last_pos: None,
+            tooltip_last_size: None,
             #[cfg(windows)]
             settings_viewport_data: None,
             arc_points_cache: Vec::with_capacity(65),
@@ -531,6 +572,8 @@ impl eframe::App for WidgetApp {
             );
             self.last_widget_size = current_size;
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(current_size.window_size()));
+            // Widget size changed: invalidate cached tooltip geometry so it re-sends.
+            self.tooltip_last_size = None;
         }
 
         // Theme visuals for widget
@@ -559,40 +602,297 @@ impl eframe::App for WidgetApp {
         }
 
         // ── Widget rendering ──
-        let (pointer_pos, button_down, button_clicked, viewport_rect) = ctx.input(|i| {
-            (
-                i.pointer.interact_pos(),
-                i.pointer.button_down(egui::PointerButton::Primary),
-                i.pointer.button_clicked(egui::PointerButton::Primary),
-                i.viewport().outer_rect,
-            )
-        });
+        let (pointer_pos, button_down, button_clicked, viewport_rect, has_pointer_event) =
+            ctx.input(|i| {
+                (
+                    i.pointer.interact_pos(),
+                    i.pointer.button_down(egui::PointerButton::Primary),
+                    i.pointer.button_clicked(egui::PointerButton::Primary),
+                    i.viewport().outer_rect,
+                    i.events
+                        .iter()
+                        .any(|e| matches!(e, egui::Event::PointerMoved(_))),
+                )
+            });
 
         let widget_size = self.settings.widget_size.window_size();
         let cfg = self.settings.widget_size.config();
         let radius = cfg.circle_radius;
-        let center = egui::pos2(2.0 + radius + cfg.stroke_width / 2.0, widget_size.y / 2.0);
+        let circle_x = 2.0 + radius + cfg.stroke_width / 2.0;
 
-        let circle_hovered = pointer_pos.map_or(false, |pos| pos.distance(center) <= radius);
+        // The widget's stable screen position ("home"). While the tooltip is
+        // shown or the widget is being dragged we track this independently of the
+        // OS window position (which moves around for top placement / drag), so the
+        // widget stays put and dragging is decoupled from window-command lag.
+        let cur_pos = viewport_rect.map(|r| r.min);
+        let mut home = self.tooltip_home.or(cur_pos);
 
-        let show_tooltip =
-            circle_hovered && !self.is_dragging && self.usage.as_ref().map_or(false, |u| !u.is_empty());
-
-        let tooltip_height = if show_tooltip {
-            let lines = self.usage.as_ref().map_or(0, |u| u.len());
-            lines as f32 * 18.0 + 24.0
-        } else {
-            0.0
+        // Mouse position in screen coordinates.
+        // ⚠ When the window is moved by our own OuterPosition command, winit does
+        // NOT emit a PointerMoved event (the mouse didn't physically move), so
+        // `pointer_pos` stays stale (relative to the OLD window position). Using
+        // `cur_pos + pointer` would give a wrong screen pos and break hover/drag
+        // → this caused the top-placement freeze (hover oscillation 845↔919).
+        // Fix: only trust `cur_pos + pointer` when a real PointerMoved event
+        // arrived this frame; otherwise carry the last known screen mouse pos.
+        let mouse_screen = match (cur_pos, pointer_pos) {
+            (Some(c), Some(pp)) if has_pointer_event => {
+                let computed = c + pp.to_vec2();
+                self.last_mouse_screen = Some(computed);
+                Some(computed)
+            }
+            (Some(c), Some(pp)) => {
+                // No real mouse event this frame: prefer the carried screen pos
+                // (it stays correct even when the window jumped). Fall back to the
+                // computed value only on the very first frame.
+                Some(self.last_mouse_screen.unwrap_or_else(|| c + pp.to_vec2()))
+            }
+            _ => self.last_mouse_screen,
         };
 
-        if show_tooltip != self.tooltip_expanded {
-            self.tooltip_expanded = show_tooltip;
-            let effective_h = widget_size.y + tooltip_height;
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                widget_size.x,
-                effective_h,
-            )));
+        // Hover detection in screen coordinates.
+        let circle_screen_center =
+            home.map(|h| egui::pos2(h.x + circle_x, h.y + widget_size.y / 2.0));
+        let circle_hovered = match (mouse_screen, circle_screen_center) {
+            (Some(ms), Some(cc)) => ms.distance(cc) <= radius,
+            _ => false,
+        };
+
+        let show_tooltip = circle_hovered
+            && !self.is_dragging
+            && !button_down
+            && self.usage.as_ref().map_or(false, |u| !u.is_empty());
+
+        // ── Tooltip sizing (natural content width, so left/right flip is visible) ──
+        const TIP_PAD: f32 = 8.0; // inner padding (text inset)
+        const TIP_LINE_H: f32 = 18.0; // line height
+        const TIP_GAP: f32 = 4.0; // gap between widget and tooltip box
+        const TIP_MIN_W: f32 = 40.0;
+
+        let (tooltip_w, tooltip_h) = if show_tooltip {
+            let font_id = egui::FontId::proportional(12.0);
+            let max_text_w = self
+                .cached_level_lines
+                .iter()
+                .map(|(text, color)| {
+                    ctx.fonts(|f| {
+                        f.layout(text.clone(), font_id.clone(), *color, f32::INFINITY)
+                            .size()
+                            .x
+                    })
+                })
+                .fold(0.0_f32, f32::max);
+            let w = (max_text_w + TIP_PAD * 2.0).max(TIP_MIN_W);
+            let lines = self.usage.as_ref().map_or(0, |u| u.len());
+            (w, lines as f32 * TIP_LINE_H + TIP_PAD * 2.0)
+        } else {
+            (0.0, 0.0)
+        };
+
+        // ── Placement: pick the first corner (in priority order) that fits ──
+        // Priority: bottom-right → bottom-left → top-left → top-right.
+        // Only computed while the tooltip is actually shown (avoids a per-frame
+        // Win32 monitor query + log line when idle).
+        //
+        // tip_right semantics: true = tooltip's RIGHT edge aligns with the
+        // widget's RIGHT edge (tooltip extends LEFT of the widget); false =
+        // tooltip's LEFT edge aligns with the widget's LEFT edge (extends RIGHT).
+        let (tip_top, tip_right, work_area) = if show_tooltip {
+            let wa: Option<egui::Rect> = home.and_then(|h| {
+                #[cfg(windows)]
+                {
+                    crate::screen::work_area_for_point(h, ctx.pixels_per_point())
+                }
+                #[cfg(not(windows))]
+                {
+                    None
+                }
+            });
+            if let (Some(h), Some(area)) = (home, wa) {
+                let tip_x_ofs = |right: bool| if right { widget_size.x - tooltip_w } else { 0.0 };
+                let bottom_y = h.y + widget_size.y + TIP_GAP;
+                let top_y = h.y - TIP_GAP - tooltip_h;
+                let tip_rect = |right: bool, top: bool| {
+                    egui::Rect::from_min_size(
+                        egui::pos2(h.x + tip_x_ofs(right), if top { top_y } else { bottom_y }),
+                        egui::vec2(tooltip_w, tooltip_h),
+                    )
+                };
+                let fits = |r: egui::Rect| {
+                    r.min.x >= area.min.x - 1.0
+                        && r.min.y >= area.min.y - 1.0
+                        && r.max.x <= area.max.x + 1.0
+                        && r.max.y <= area.max.y + 1.0
+                };
+                let chosen = if fits(tip_rect(true, false)) {
+                    (false, true)
+                } else if fits(tip_rect(false, false)) {
+                    (false, false)
+                } else if fits(tip_rect(false, true)) {
+                    (true, false)
+                } else if fits(tip_rect(true, true)) {
+                    (true, true)
+                } else {
+                    // Nothing fits cleanly (widget itself is off-screen, or the
+                    // tooltip is wider than the work area). Pick the side with
+                    // more room so clamping below keeps the tooltip on-screen.
+                    let right_room = (area.max.x - (h.x + widget_size.x)).max(0.0);
+                    let left_room = (h.x - area.min.x).max(0.0);
+                    (false, left_room >= right_room)
+                };
+                (chosen.0, chosen.1, Some(area))
+            } else {
+                (false, true, None)
+            }
+        } else {
+            (false, true, None)
+        };
+
+        // ── Drag: track the widget's screen position directly ──
+        // The widget follows the mouse via home = mouse - anchor, independent of
+        // the OS window's (lagging) position. This keeps dragging stable even
+        // while tooltip geometry commands are in flight, and avoids the window
+        // being tall/moved (which used to get OS-clamped near screen edges).
+        // The widget is clamped to the monitor's work area so it can't be dragged
+        // off-screen or onto the taskbar.
+        if button_down && (circle_hovered || self.is_dragging) {
+            if let (Some(ms), Some(h)) = (mouse_screen, home) {
+                if !self.is_dragging {
+                    self.is_dragging = true;
+                    self.drag_anchor = Some(ms - h);
+                }
+                if let Some(anchor) = self.drag_anchor {
+                    let new_home = ms - anchor;
+                    // Use the ACTUAL window size (from outer_rect) for clamping,
+                    // not the configured widget_size. On high-DPI displays the
+                    // actual logical window size may differ from widget_size
+                    // (e.g. with_inner_size(240) can be interpreted as physical
+                    // pixels), and clamping with the wrong size leaves a gap
+                    // between the widget and the screen edge.
+                    let actual_size = viewport_rect
+                        .map(|r| r.size())
+                        .unwrap_or(widget_size);
+                    let clamped = clamp_home_to_work_area(
+                        new_home,
+                        actual_size,
+                        ctx.pixels_per_point(),
+                    );
+                    home = Some(clamped);
+                    self.tooltip_home = Some(clamped);
+                }
+            }
         }
+
+        // ── Desired window geometry ──
+        // The tooltip's horizontal position is CLAMPED to the work area so it
+        // stays fully on-screen even when the widget itself is at/past a screen
+        // edge (the "nothing fits" fallback). The window is sized/positioned to
+        // cover both the widget (at `home`) and the tooltip (at `tip_screen_x`).
+        let full_h = widget_size.y + TIP_GAP + tooltip_h;
+
+        // Preferred tooltip left edge (before clamping), in screen coords.
+        let tip_pref_x = home
+            .map(|h| if tip_right { h.x + widget_size.x - tooltip_w } else { h.x })
+            .unwrap_or(0.0);
+        // Clamp so the whole tooltip stays within the work area horizontally.
+        let tip_screen_x = if show_tooltip {
+            match work_area {
+                Some(a) if tooltip_w <= (a.max.x - a.min.x).max(0.0) => {
+                    tip_pref_x.clamp(a.min.x, a.max.x - tooltip_w)
+                }
+                _ => tip_pref_x,
+            }
+        } else {
+            tip_pref_x
+        };
+
+        // Window spans [win_left, win_right] covering widget + tooltip.
+        let (win_left, win_right) = if show_tooltip {
+            let h = home.unwrap_or(egui::Pos2::ZERO);
+            let wl = h.x.min(tip_screen_x);
+            let wr = (h.x + widget_size.x).max(tip_screen_x + tooltip_w);
+            (wl, wr)
+        } else {
+            let h = home.unwrap_or(egui::Pos2::ZERO);
+            (h.x, h.x + widget_size.x)
+        };
+        let win_w = (win_right - win_left).max(0.0);
+        let desired_size = if show_tooltip {
+            egui::vec2(win_w, full_h)
+        } else {
+            widget_size
+        };
+        let desired_pos = if self.is_dragging {
+            home
+        } else if show_tooltip {
+            home.map(|h| {
+                let win_y = if tip_top {
+                    h.y - TIP_GAP - tooltip_h
+                } else {
+                    h.y
+                };
+                egui::pos2(win_left, win_y)
+            })
+        } else {
+            home
+        };
+
+        // Send InnerSize when it changes.
+        if self.tooltip_last_size != Some(desired_size) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(desired_size));
+            self.tooltip_last_size = Some(desired_size);
+        }
+        // Send OuterPosition when it changes (drag, top placement, restore).
+        if let Some(dp) = desired_pos {
+            if self.tooltip_last_pos.map_or(true, |lp| lp.distance(dp) > 0.5) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(dp));
+                self.tooltip_last_pos = Some(dp);
+            }
+        }
+
+        // ── tooltip_home lifecycle ──
+        if self.is_dragging {
+            // updated above; kept as the widget's current screen position.
+        } else if show_tooltip {
+            if self.tooltip_home.is_none() {
+                self.tooltip_home = cur_pos;
+            }
+        } else if let (Some(c), Some(h)) = (cur_pos, self.tooltip_home) {
+            // Tooltip hidden & not dragging: clear home once the window has
+            // settled back at home (handles the 1-frame restore lag without a
+            // visual jump).
+            if c.distance(h) < 1.0 {
+                self.tooltip_home = None;
+            }
+        }
+        self.tooltip_expanded = show_tooltip;
+
+        // Drawing offsets are relative to the *current* (lagging) window position;
+        // `widget_local_*` compensate so the widget appears at `home` on screen.
+        let cur = cur_pos.unwrap_or(egui::Pos2::ZERO);
+        let home_pos = home.unwrap_or(egui::Pos2::ZERO);
+        // The widget's screen left = home.x; window's (commanded) left = win_left.
+        // With lag, actual window left = cur.x, so widget local x = home.x - cur.x
+        // (equivalently win_left + (home.x - win_left) - cur.x, and home.x - win_left
+        // is constant, absorbed into the lag term).
+        let widget_local_x = home_pos.x - cur.x;
+        let widget_local_y = home_pos.y - cur.y;
+        let center = egui::pos2(
+            widget_local_x + circle_x,
+            widget_local_y + widget_size.y / 2.0,
+        );
+
+        // Tooltip local position = its screen pos - current window pos.
+        let tip_local = if show_tooltip {
+            let tip_screen_y = if tip_top {
+                home_pos.y - TIP_GAP - tooltip_h
+            } else {
+                home_pos.y + widget_size.y + TIP_GAP
+            };
+            Some(egui::pos2(tip_screen_x - cur.x, tip_screen_y - cur.y))
+        } else {
+            None
+        };
 
         let hovered = circle_hovered;
 
@@ -638,7 +938,7 @@ impl eframe::App for WidgetApp {
             });
             let text_pos = egui::pos2(
                 center.x + radius + 6.0,
-                (widget_size.y - galley.size().y) / 2.0,
+                widget_local_y + (widget_size.y - galley.size().y) / 2.0,
             );
             painter.galley(text_pos, galley, Color32::from_rgb(244, 67, 54));
         } else if self.settings.show_percentage {
@@ -649,28 +949,24 @@ impl eframe::App for WidgetApp {
                 let galley = ctx.fonts(|f| f.layout(text, font_id, color, f32::INFINITY));
                 let text_pos = egui::pos2(
                     center.x + radius + 6.0,
-                    (widget_size.y - galley.size().y) / 2.0,
+                    widget_local_y + (widget_size.y - galley.size().y) / 2.0,
                 );
                 painter.galley(text_pos, galley, color);
             }
         }
 
-        if show_tooltip {
-            if self.usage.is_some() {
-                let tooltip_y = widget_size.y + 4.0;
-                let tooltip_bg = egui::Rect::from_min_size(
-                    egui::pos2(4.0, tooltip_y),
-                    egui::vec2(widget_size.x - 8.0, tooltip_height - 8.0),
-                );
+        if let Some(tl) = tip_local {
+            if self.usage.is_some() && tooltip_w > 0.0 {
+                let tooltip_bg = egui::Rect::from_min_size(tl, egui::vec2(tooltip_w, tooltip_h));
                 painter.rect_filled(tooltip_bg, 6.0, colors.bg_fill);
 
                 let font_id = egui::FontId::proportional(12.0);
-                let mut y = tooltip_y + 8.0;
+                let mut y = tl.y + TIP_PAD;
                 for (text, color) in &self.cached_level_lines {
                     let galley =
                         ctx.fonts(|f| f.layout(text.clone(), font_id.clone(), *color, f32::INFINITY));
-                    painter.galley(egui::pos2(12.0, y), galley, *color);
-                    y += 18.0;
+                    painter.galley(egui::pos2(tl.x + TIP_PAD, y), galley, *color);
+                    y += TIP_LINE_H;
                 }
             }
         }
@@ -679,37 +975,26 @@ impl eframe::App for WidgetApp {
             self.show_settings = true;
         }
 
-        if button_down && (circle_hovered || self.is_dragging) {
-            if let (Some(viewport_min), Some(current_pos)) =
-                (viewport_rect.map(|r| r.min), pointer_pos)
-            {
-                let screen_mouse = viewport_min + current_pos.to_vec2();
-
-                if !self.is_dragging {
-                    self.is_dragging = true;
-                    self.drag_offset = Some(screen_mouse - viewport_min);
-                }
-
-                if let Some(offset) = self.drag_offset {
-                    let target = screen_mouse - offset;
-                    let current = viewport_min;
-                    let lerp_factor = 0.6;
-                    let new_x = current.x + (target.x - current.x) * lerp_factor;
-                    let new_y = current.y + (target.y - current.y) * lerp_factor;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(
-                        egui::Pos2::new(new_x, new_y),
-                    ));
-                }
-            }
-        }
-
         if self.is_dragging && !button_down {
             self.is_dragging = false;
-            self.drag_offset = None;
-            if let Some(rect) = viewport_rect {
-                self.settings.window_x = Some(rect.min.x);
-                self.settings.window_y = Some(rect.min.y);
-                self.settings.save();
+            self.drag_anchor = None;
+            // Persist the widget's stable screen position (home), which during the
+            // drag was tracked independent of the (lagging) window rect. Skip the
+            // disk write when the position is unchanged (e.g. a pure click).
+            if let Some(h) = home {
+                let changed = self
+                    .settings
+                    .window_x
+                    .map_or(true, |x| (x - h.x).abs() > 0.5)
+                    || self
+                        .settings
+                        .window_y
+                        .map_or(true, |y| (y - h.y).abs() > 0.5);
+                if changed {
+                    self.settings.window_x = Some(h.x);
+                    self.settings.window_y = Some(h.y);
+                    self.settings.save();
+                }
             }
         }
 

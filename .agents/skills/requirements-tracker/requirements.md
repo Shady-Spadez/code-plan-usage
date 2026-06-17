@@ -106,16 +106,28 @@
 **Status**: ✅ Implemented
 
 ### Description
-鼠标悬停在 widget 圆形区域时，展开显示各层级的用量详情。
+鼠标悬停在 widget 圆形区域时，展开显示各层级的用量详情。提示框根据屏幕可用区域自适应选择展示方位，避免被屏幕边缘/任务栏裁剪。
 
 ### Acceptance Criteria
 - [x] 显示各层级的用量百分比和重置倒计时
 - [x] 窗口自动扩展以容纳提示框
 - [x] 拖拽时隐藏提示框
 - [x] 颜色与百分比对应
+- [x] 提示框方位按优先级自适应：右下 → 左下 → 左上 → 右上（取第一个能完整放下的角）
+- [x] 屏幕工作区（排除任务栏）通过 Win32 `MonitorFromPoint` + `GetMonitorInfoW` 获取，多显示器取窗口所在显示器
+- [x] 无论提示框在上方还是下方出现，widget 本体在屏幕上的位置保持不变（不跳动）
+- [x] 提示框出现/消失时有至多 1 帧的延迟（视口命令延迟），不影响交互
+- [x] 提示框宽度按内容自适应；当 widget 本体已超出屏幕边缘、四个角都放不下时，提示框水平位置钳制到工作区内，确保始终完整可见（不再往右出屏）
+- [x] 窗口宽度按需加宽以容纳比 widget 更宽的提示框，widget 屏幕位置不变
 
 ### Implementation Notes
-- `src/main.rs`: format_level_line(), tooltip rendering in update()
+- `src/widget.rs`: 提示框尺寸/方位计算、窗口几何与绘制（update() 中）
+- `src/screen.rs`: `work_area_for_point()` 获取指定屏幕点所在显示器的工作区
+- 方位判断：依据 widget 屏幕位置 + 工作区，按 右下/左下/左上/右上 优先级取首个可放下者
+- 兜底：四个角都放不下时按左右余量选边，并把提示框 x 钳制到 `[area.min.x, area.max.x - tooltip_w]`
+- 窗口覆盖 widget + 提示框的并集区域；widget 与提示框的本地绘制坐标用 `home - cur` 做 1 帧滞后补偿
+- 上方放置时窗口上移（`OuterPosition`）并把 widget 绘制在窗口底部，保持 widget 屏幕位置稳定
+- 悬停检测用屏幕坐标，且仅在真实 `PointerMoved` 事件帧更新鼠标屏幕位置（避免窗口被自身命令移动时本地指针过期导致的悬停抖动/死循环）
 
 ---
 
@@ -129,12 +141,19 @@
 
 ### Acceptance Criteria
 - [x] 仅在圆形区域可发起拖拽
-- [x] 拖拽时使用 lerp 平滑移动
+- [x] 拖拽时直接跟踪鼠标（基于 widget 屏幕位置 home，1 帧延迟由绘制偏移补偿）
 - [x] 拖拽结束后保存窗口位置
 - [x] 拖拽时隐藏提示框
+- [x] 从任意提示框状态（含上方放置）发起拖拽不会卡住、widget 不跳动
+- [x] 纯点击（无位移）不触发多余的磁盘保存，且不保存错误位置
+- [x] widget 本体不能拖出屏幕，也不能拖到任务栏上（水平方向可贴屏幕左右边，垂直方向钳制到工作区避免压任务栏）
 
 ### Implementation Notes
-- `src/main.rs`: 自定义拖拽逻辑，使用屏幕坐标追踪
+- `src/widget.rs`: 拖拽基于 `drag_anchor`（鼠标相对 widget 屏幕 home 的偏移），每帧 `home = mouse - anchor`，与 OS 窗口瞬时位置解耦
+- 拖拽开始即把窗口恢复为 `widget_size`（避免放大的提示框窗口在屏幕边缘被 OS 夹住导致卡住）
+- 每帧拖拽位置经 `clamp_home_to_work_area` 钳制：水平用显示器全屏矩形（可贴左右屏幕边），垂直用工作区（排除任务栏），多显示器取 `home` 所在屏
+- `src/screen.rs`: `screen_info_for_point()` 同时返回 `monitor`（全屏）与 `work_area`（排除任务栏）矩形
+- 释放时仅当位置实际变化才 `settings.save()`
 
 ---
 
