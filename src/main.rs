@@ -128,7 +128,7 @@ fn main() -> eframe::Result {
     #[cfg(windows)]
     apply_auto_start(settings.auto_start);
 
-    let initial_size = settings.widget_size.window_size();
+    let initial_size = crate::theme::widget_window_size();
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size(initial_size)

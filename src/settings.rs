@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::debug_log;
-use crate::theme::{Theme, WidgetSize};
+use crate::theme::Theme;
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
@@ -10,8 +10,6 @@ use crate::theme::{Theme, WidgetSize};
 pub struct Settings {
     pub cookie: String,
     pub csrf_token: String,
-    #[serde(default)]
-    pub show_percentage: bool,
     #[serde(default)]
     pub window_x: Option<f32>,
     #[serde(default)]
@@ -26,8 +24,6 @@ pub struct Settings {
     pub refresh_interval_secs: u64,
     #[serde(default)]
     pub theme: Theme,
-    #[serde(default)]
-    pub widget_size: WidgetSize,
 }
 
 fn default_region() -> String {
@@ -43,7 +39,6 @@ impl Default for Settings {
         Self {
             cookie: String::new(),
             csrf_token: String::new(),
-            show_percentage: false,
             window_x: None,
             window_y: None,
             auto_start: false,
@@ -51,7 +46,6 @@ impl Default for Settings {
             notification_threshold: 0.0,
             refresh_interval_secs: default_refresh_secs(),
             theme: Theme::Dark,
-            widget_size: WidgetSize::Medium,
         }
     }
 }
@@ -62,14 +56,9 @@ impl Settings {
     }
 
     pub fn load() -> Self {
-        // First, try to load existing settings from file to preserve
-        // position, theme, size, and other user preferences.
         let mut settings = Self::load_from_file().unwrap_or_default();
 
-        // If credentials are missing, try to extract from browser or cookie file.
-        // Merge only the credential fields — don't overwrite other settings.
         if !settings.is_configured() {
-            // Cookie file (Netscape format) — non-blocking fallback
             if let Some(cookie_settings) = Self::try_load_from_cookie_file() {
                 debug_log!("Settings::load: loaded credentials from cookie file");
                 settings.cookie = cookie_settings.cookie;

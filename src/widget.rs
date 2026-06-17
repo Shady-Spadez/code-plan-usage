@@ -9,7 +9,7 @@ use eframe::glow::HasContext as _;
 use crate::api::{fetch_usage, format_level_line, QuotaLevel};
 use crate::debug_log;
 use crate::settings::Settings;
-use crate::theme::{percent_color, Theme, WidgetSize};
+use crate::theme::{percent_color, widget_config, widget_window_size, Theme};
 use crate::{DEFAULT_REFRESH_INTERVAL, HOVER_COOLDOWN, show_usage_notification};
 
 #[cfg(windows)]
@@ -68,7 +68,6 @@ pub struct WidgetApp {
     pub show_settings: bool,
     pub notification_sent: bool,
     pub animated_percent: f64,
-    pub last_widget_size: WidgetSize,
     #[cfg(windows)]
     pub color_key_applied: bool,
     #[cfg(debug_assertions)]
@@ -112,9 +111,8 @@ pub struct WidgetApp {
 
 impl WidgetApp {
     pub fn with_settings(settings: Settings) -> Self {
-        let widget_size = settings.widget_size;
-        debug_log!("WidgetApp initialized: theme={:?}, size={:?}, auto_start={}, region={}, refresh_interval={}s, notification_threshold={}%",
-            settings.theme, settings.widget_size, settings.auto_start, settings.region, settings.refresh_interval_secs, settings.notification_threshold);
+        debug_log!("WidgetApp initialized: theme={:?}, auto_start={}, region={}, refresh_interval={}s, notification_threshold={}%",
+            settings.theme, settings.auto_start, settings.region, settings.refresh_interval_secs, settings.notification_threshold);
         Self {
             settings,
             usage: None,
@@ -125,7 +123,6 @@ impl WidgetApp {
             show_settings: false,
             notification_sent: false,
             animated_percent: 0.0,
-            last_widget_size: widget_size,
             #[cfg(windows)]
             color_key_applied: false,
             #[cfg(debug_assertions)]
@@ -560,8 +557,6 @@ impl eframe::App for WidgetApp {
                 if let Some(ref state) = self.settings_viewport_data {
                     let s = state.settings.borrow();
                     self.settings.theme = s.theme;
-                    self.settings.widget_size = s.widget_size;
-                    self.settings.show_percentage = s.show_percentage;
                 }
             }
 
@@ -574,19 +569,6 @@ impl eframe::App for WidgetApp {
             }
         }
 
-        // Dynamic window sizing
-        let current_size = self.settings.widget_size;
-        if current_size != self.last_widget_size {
-            debug_log!(
-                "Widget size changed: {:?} -> {:?}",
-                self.last_widget_size,
-                current_size
-            );
-            self.last_widget_size = current_size;
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(current_size.window_size()));
-            // Widget size changed: invalidate cached tooltip geometry so it re-sends.
-            self.tooltip_last_size = None;
-        }
 
         // Theme visuals for widget
         let colors = self.settings.theme.colors();
@@ -614,7 +596,7 @@ impl eframe::App for WidgetApp {
         }
 
         // ── Widget rendering ──
-        let (pointer_pos, button_down, button_clicked, viewport_rect, has_pointer_event) =
+        let (pointer_pos, button_down, button_clicked, viewport_rect, has_pointer_event, has_pointer) =
             ctx.input(|i| {
                 (
                     i.pointer.interact_pos(),
@@ -624,11 +606,12 @@ impl eframe::App for WidgetApp {
                     i.events
                         .iter()
                         .any(|e| matches!(e, egui::Event::PointerMoved(_))),
+                    i.pointer.has_pointer(),
                 )
             });
 
-        let widget_size = self.settings.widget_size.window_size();
-        let cfg = self.settings.widget_size.config();
+        let widget_size = widget_window_size();
+        let cfg = widget_config();
         let radius = cfg.circle_radius;
         let circle_x = 2.0 + radius + cfg.stroke_width / 2.0;
 
@@ -647,19 +630,32 @@ impl eframe::App for WidgetApp {
         // → this caused the top-placement freeze (hover oscillation 845↔919).
         // Fix: only trust `cur_pos + pointer` when a real PointerMoved event
         // arrived this frame; otherwise carry the last known screen mouse pos.
-        let mouse_screen = match (cur_pos, pointer_pos) {
-            (Some(c), Some(pp)) if has_pointer_event => {
-                let computed = c + pp.to_vec2();
-                self.last_mouse_screen = Some(computed);
-                Some(computed)
+        //
+        // ⚠ When the mouse leaves the window, egui fires `Event::PointerGone`
+        // which clears `latest_pos` (and thus `has_pointer()`) immediately.
+        // `interact_pos`, however, is sticky for one frame after PointerGone
+        // (egui only clears it next frame), so relying on `pointer_pos` alone
+        // would leave `circle_hovered` true on the exact frame the mouse exits
+        // → the tooltip wouldn't hide on fast mouse-leaves. We therefore drop
+        // the carried screen pos as soon as `has_pointer` is false.
+        let mouse_screen = if !has_pointer {
+            self.last_mouse_screen = None;
+            None
+        } else {
+            match (cur_pos, pointer_pos) {
+                (Some(c), Some(pp)) if has_pointer_event => {
+                    let computed = c + pp.to_vec2();
+                    self.last_mouse_screen = Some(computed);
+                    Some(computed)
+                }
+                (Some(c), Some(pp)) => {
+                    // No real mouse event this frame: prefer the carried screen pos
+                    // (it stays correct even when the window jumped). Fall back to the
+                    // computed value only on the very first frame.
+                    Some(self.last_mouse_screen.unwrap_or_else(|| c + pp.to_vec2()))
+                }
+                _ => self.last_mouse_screen,
             }
-            (Some(c), Some(pp)) => {
-                // No real mouse event this frame: prefer the carried screen pos
-                // (it stays correct even when the window jumped). Fall back to the
-                // computed value only on the very first frame.
-                Some(self.last_mouse_screen.unwrap_or_else(|| c + pp.to_vec2()))
-            }
-            _ => self.last_mouse_screen,
         };
 
         // Hover detection in screen coordinates.
@@ -960,7 +956,6 @@ impl eframe::App for WidgetApp {
                 fill: Color32::TRANSPARENT,
                 stroke: Stroke::new(cfg.stroke_width, color).into(),
             }));
-            painter.circle_filled(center, cfg.circle_center_dot, color);
         }
 
         if let Some(ref err) = self.error {
@@ -978,15 +973,15 @@ impl eframe::App for WidgetApp {
                 widget_local_y + (widget_size.y - galley.size().y) / 2.0,
             );
             painter.galley(text_pos, galley, Color32::from_rgb(244, 67, 54));
-        } else if self.settings.show_percentage {
+        } else {
             if let Some(pct) = self.get_monthly_percent() {
                 let color = percent_color(pct);
                 let text = format!("{:.1}%", pct);
                 let font_id = egui::FontId::proportional(cfg.percent_font_size);
                 let galley = ctx.fonts(|f| f.layout(text, font_id, color, f32::INFINITY));
                 let text_pos = egui::pos2(
-                    center.x + radius + 6.0,
-                    widget_local_y + (widget_size.y - galley.size().y) / 2.0,
+                    center.x - galley.size().x / 2.0,
+                    center.y - galley.size().y / 2.0,
                 );
                 painter.galley(text_pos, galley, color);
             }
@@ -1207,42 +1202,6 @@ impl WidgetApp {
                                         settings.theme = Theme::Light;
                                     }
                                 });
-                                ui.add_space(6.0);
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("窗口大小")
-                                            .color(text_muted)
-                                            .font(egui::FontId::proportional(12.0)),
-                                    );
-                                    let current = settings.widget_size;
-                                    if ui
-                                        .selectable_label(current == WidgetSize::Small, "小")
-                                        .clicked()
-                                    {
-                                        settings.widget_size = WidgetSize::Small;
-                                    }
-                                    if ui
-                                        .selectable_label(current == WidgetSize::Medium, "中")
-                                        .clicked()
-                                    {
-                                        settings.widget_size = WidgetSize::Medium;
-                                    }
-                                    if ui
-                                        .selectable_label(current == WidgetSize::Large, "大")
-                                        .clicked()
-                                    {
-                                        settings.widget_size = WidgetSize::Large;
-                                    }
-                                });
-                                ui.add_space(6.0);
-                                if ui
-                                    .checkbox(
-                                        &mut settings.show_percentage,
-                                        "显示百分比数字",
-                                    )
-                                    .changed()
-                                {
-                                }
                             });
 
                             // ── 其他 ──

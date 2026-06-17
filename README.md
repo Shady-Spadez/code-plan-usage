@@ -70,6 +70,13 @@ cargo build --release             # 构建
 cd installer && build.bat         # 构建 MSI 安装包（需 WiX Toolset）
 ```
 
+## 构建 Release 产物
+
+```bash
+cargo build --release
+Compress-Archive -LiteralPath target\release\coding-plan-widget.exe -DestinationPath coding-plan-widget-v0.01-x64.zip -Force
+```
+
 ## 许可证
 
 [MIT](LICENSE)
