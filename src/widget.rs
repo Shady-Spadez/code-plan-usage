@@ -615,49 +615,10 @@ impl eframe::App for WidgetApp {
                 )
             });
 
+        let widget_size = self.settings.widget_size.window_size();
         let cfg = self.settings.widget_size.config();
         let radius = cfg.circle_radius;
         let circle_x = 2.0 + radius + cfg.stroke_width / 2.0;
-
-        // Calculate the ACTUAL visible content width (circle + optional text) so
-        // the OS window tightly fits the widget. The old fixed 240px width left
-        // a large transparent gap on the right side of the window — when the
-        // window was clamped to the right screen edge, the visible content
-        // (circle + text, ~80px) was ~160px away from the edge.
-        let widget_size = {
-            let base = self.settings.widget_size.window_size();
-            let circle_right = circle_x + radius + cfg.stroke_width / 2.0 + 2.0;
-            let text_w = if let Some(ref err) = self.error {
-                let font_id = egui::FontId::proportional(cfg.error_font_size);
-                ctx.fonts(|f| {
-                    f.layout(err.clone(), font_id, Color32::TRANSPARENT, f32::INFINITY)
-                        .size()
-                        .x
-                })
-            } else if self.settings.show_percentage {
-                if let Some(pct) = self.get_monthly_percent() {
-                    let text = format!("{:.1}%", pct);
-                    let font_id = egui::FontId::proportional(cfg.percent_font_size);
-                    ctx.fonts(|f| {
-                        f.layout(text, font_id, Color32::TRANSPARENT, f32::INFINITY)
-                            .size()
-                            .x
-                    })
-                } else {
-                    0.0
-                }
-            } else {
-                0.0
-            };
-            let w = if text_w > 0.0 {
-                (circle_x + radius + 6.0 + text_w + 4.0).max(circle_right)
-            } else {
-                circle_right
-            };
-            // Ceil to avoid sub-pixel width changes causing unnecessary resizes
-            // when the percentage text changes.
-            egui::vec2(w.ceil(), base.y)
-        };
 
         // The widget's stable screen position ("home"). While the tooltip is
         // shown or the widget is being dragged we track this independently of the
