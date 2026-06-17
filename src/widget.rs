@@ -19,6 +19,11 @@ use crate::tray;
 
 // ── Widget State ─────────────────────────────────────────────────────────────
 
+/// Minimum mouse displacement (in logical px) before a button-press on the
+/// circle is treated as a drag instead of a click. Prevents the window from
+/// resizing (tooltip hide) during a pure click, which broke `button_clicked`.
+const DRAG_THRESHOLD: f32 = 4.0;
+
 /// Clamp a widget home position so the whole widget (size `ws`) stays on its
 /// monitor and off the taskbar. Horizontally the widget may touch the screen
 /// edges (uses the full monitor rect, not the work area, so it isn't kept away
@@ -71,6 +76,12 @@ pub struct WidgetApp {
     /// Drag anchor: offset from the widget's screen position (home) to the mouse,
     /// captured at drag start. The widget is dragged by tracking `mouse - anchor`.
     pub drag_anchor: Option<egui::Vec2>,
+    /// Mouse position (screen coords) captured when the primary button was
+    /// pressed while hovering the circle. Dragging only engages after the mouse
+    /// moves more than `DRAG_THRESHOLD` px from this point, so a pure click
+    /// (press+release without moving) doesn't shrink the window / hide the
+    /// tooltip mid-click (which used to break `button_clicked`).
+    pub press_pos: Option<egui::Pos2>,
     /// Last known mouse position in screen coordinates, carried across frames.
     /// When the window is moved by tooltip geometry (no real mouse movement),
     /// winit does NOT emit a PointerMoved event, so the egui pointer stays stale
@@ -120,6 +131,7 @@ impl WidgetApp {
             #[cfg(debug_assertions)]
             frame_count: 0,
             drag_anchor: None,
+            press_pos: None,
             last_mouse_screen: None,
             refresh_in_progress: false,
             pending_result: None,
@@ -658,9 +670,13 @@ impl eframe::App for WidgetApp {
             _ => false,
         };
 
+        // Note: do NOT hide the tooltip on `button_down`. Hiding it shrinks the
+        // window (InnerSize command) during the click, which can make egui lose
+        // the pointer release → button_clicked never fires → settings never
+        // opens. Instead we keep the tooltip shown during the press; the click
+        // is detected below and is_dragging handles actual drag motion.
         let show_tooltip = circle_hovered
             && !self.is_dragging
-            && !button_down
             && self.usage.as_ref().map_or(false, |u| !u.is_empty());
 
         // ── Tooltip sizing (natural content width, so left/right flip is visible) ──
@@ -755,32 +771,51 @@ impl eframe::App for WidgetApp {
         // being tall/moved (which used to get OS-clamped near screen edges).
         // The widget is clamped to the monitor's work area so it can't be dragged
         // off-screen or onto the taskbar.
+        //
+        // Drag-vs-click: we capture the press position and only engage dragging
+        // once the mouse moves beyond DRAG_THRESHOLD. A pure click (press+release
+        // without moving) never sets is_dragging, so the tooltip stays shown and
+        // the window doesn't resize mid-click (which used to break button_clicked
+        // → settings wouldn't open).
         if button_down && (circle_hovered || self.is_dragging) {
             if let (Some(ms), Some(h)) = (mouse_screen, home) {
-                if !self.is_dragging {
-                    self.is_dragging = true;
-                    self.drag_anchor = Some(ms - h);
+                // Capture press origin on the first frame the button is down.
+                if self.press_pos.is_none() {
+                    self.press_pos = Some(ms);
                 }
-                if let Some(anchor) = self.drag_anchor {
-                    let new_home = ms - anchor;
-                    // `home` is the widget's top-left corner and the widget
-                    // itself only occupies `widget_size` (in egui points / logical
-                    // px, the same space as the monitor rect from screen.rs and
-                    // as `home`). Clamp with widget_size, NOT the actual OS
-                    // window size: right after the tooltip was shown the window
-                    // is still expanded to cover the tooltip (resize lag), so
-                    // `outer_rect.size()` == widget_size + tooltip_width and
-                    // clamping with it would subtract the tooltip width, leaving
-                    // a gap between the widget and the right screen edge. The
-                    // tooltip is clamped independently below (tip_screen_x), so
-                    // it never needs to factor into the widget's own clamp.
-                    let clamped = clamp_home_to_work_area(
-                        new_home,
-                        widget_size,
-                        ctx.pixels_per_point(),
-                    );
-                    home = Some(clamped);
-                    self.tooltip_home = Some(clamped);
+                // Check if the mouse has moved beyond the drag threshold.
+                let should_drag = self.is_dragging
+                    || self
+                        .press_pos
+                        .map_or(false, |p| p.distance(ms) > DRAG_THRESHOLD);
+                if should_drag {
+                    if !self.is_dragging {
+                        self.is_dragging = true;
+                        // anchor = offset from widget home to mouse at drag start.
+                        self.drag_anchor = Some(ms - h);
+                    }
+                    if let Some(anchor) = self.drag_anchor {
+                        let new_home = ms - anchor;
+                        // `home` is the widget's top-left corner and the widget
+                        // itself only occupies `widget_size` (in egui points /
+                        // logical px, the same space as the monitor rect from
+                        // screen.rs and as `home`). Clamp with widget_size, NOT
+                        // the actual OS window size: right after the tooltip was
+                        // shown the window is still expanded to cover the tooltip
+                        // (resize lag), so `outer_rect.size()` == widget_size +
+                        // tooltip_width and clamping with it would subtract the
+                        // tooltip width, leaving a gap between the widget and the
+                        // right screen edge. The tooltip is clamped independently
+                        // below (tip_screen_x), so it never needs to factor into
+                        // the widget's own clamp.
+                        let clamped = clamp_home_to_work_area(
+                            new_home,
+                            widget_size,
+                            ctx.pixels_per_point(),
+                        );
+                        home = Some(clamped);
+                        self.tooltip_home = Some(clamped);
+                    }
                 }
             }
         }
@@ -977,25 +1012,29 @@ impl eframe::App for WidgetApp {
             self.show_settings = true;
         }
 
-        if self.is_dragging && !button_down {
+        // Clear press tracking when the button is released. If we were dragging,
+        // persist the new position; for a pure click (never dragged) just clear
+        // press_pos without a disk write.
+        if !button_down && (self.is_dragging || self.press_pos.is_some()) {
+            let was_dragging = self.is_dragging;
             self.is_dragging = false;
             self.drag_anchor = None;
-            // Persist the widget's stable screen position (home), which during the
-            // drag was tracked independent of the (lagging) window rect. Skip the
-            // disk write when the position is unchanged (e.g. a pure click).
-            if let Some(h) = home {
-                let changed = self
-                    .settings
-                    .window_x
-                    .map_or(true, |x| (x - h.x).abs() > 0.5)
-                    || self
+            self.press_pos = None;
+            if was_dragging {
+                if let Some(h) = home {
+                    let changed = self
                         .settings
-                        .window_y
-                        .map_or(true, |y| (y - h.y).abs() > 0.5);
-                if changed {
-                    self.settings.window_x = Some(h.x);
-                    self.settings.window_y = Some(h.y);
-                    self.settings.save();
+                        .window_x
+                        .map_or(true, |x| (x - h.x).abs() > 0.5)
+                        || self
+                            .settings
+                            .window_y
+                            .map_or(true, |y| (y - h.y).abs() > 0.5);
+                    if changed {
+                        self.settings.window_x = Some(h.x);
+                        self.settings.window_y = Some(h.y);
+                        self.settings.save();
+                    }
                 }
             }
         }
