@@ -1,152 +1,148 @@
 # Coding Plan Widget — Features
 
 > 本文档记录所有已验证、已实现的功能。由 acceptance-tester 技能自动维护。
+> 最后收敛日期: 2026-06-17
 
 ---
 
 ## 1. Widget 悬浮显示
 
-**Verified**: 2026-06-15
+**Verified**: 2026-06-17
 
 ### Summary
-一个透明、无边框、置顶的悬浮 widget，显示 Coding Plan 的用量百分比（圆形进度条），支持多尺寸、多主题，进度条颜色随百分比变化并有平滑动画。
+透明、无边框、置顶的悬浮 widget，显示 Coding Plan 当月用量百分比（圆形进度条）。固定 60×60 尺寸，百分比数字居中显示在圆形内，进度条颜色随百分比变化（绿→黄→橙→红），使用帧率无关的指数衰减平滑动画。
 
 ### Key Files
-- `src/main.rs` — WidgetApp, update(), widget rendering
-- `src/widget.rs` — Widget 渲染逻辑
+- `src/widget.rs` — WidgetApp, update(), widget rendering
+- `src/theme.rs` — widget_config() 固定尺寸, percent_color()
+- `src/main.rs` — 窗口创建（with_transparent/with_decorations/with_always_on_top）
 
 ---
 
 ## 2. 系统托盘
 
-**Verified**: 2026-06-15
+**Verified**: 2026-06-17
 
 ### Summary
 系统托盘图标，支持左键切换显示/隐藏、右键菜单（显示/隐藏、刷新、设置、退出）。
 
 ### Key Files
-- `src/tray.rs` — 完整的托盘实现
+- `src/tray.rs` — 完整的托盘实现，SETTINGS_REQUESTED 原子标志
 
 ---
 
 ## 3. 设置面板
 
-**Verified**: 2026-06-15
+**Verified**: 2026-06-17
 
 ### Summary
-独立的设置面板，与 widget 互斥显示（同一窗口切换模式），支持 Cookie/CSRF Token/区域代码/刷新间隔/通知阈值/主题/窗口大小/开机自启/显示百分比等配置，分为通用和 Cookie 两个签页。
+通过 `show_viewport_immediate` 弹出的独立 popup window（640×720，带标题栏，不可缩放），分为"通用"和"Cookie"两个签页。配置项包括 Cookie、CSRF Token、区域代码、刷新间隔、通知阈值、主题、开机自启。支持手动保存、未保存更改确认对话框，主题实时同步到 widget。点击 widget 圆形区域或托盘菜单"设置"均可打开。
 
 ### Key Files
-- `src/main.rs` — render_settings_viewport(), 设置模式切换
-- `src/settings.rs` — 设置数据结构与持久化
+- `src/widget.rs` — render_settings_viewport(), show_viewport_immediate 调用, SettingsViewportState
+- `src/settings.rs` — Settings 数据结构与持久化
 
 ---
 
 ## 4. 用量数据获取
 
-**Verified**: 2026-06-15
+**Verified**: 2026-06-17
 
 ### Summary
-从火山引擎 API 获取 Coding Plan 用量数据，支持后台异步刷新、定时刷新、悬停刷新、手动刷新。
+从火山引擎 `GetCodingPlanUsage` API 获取用量数据，支持配置区域代码。后台线程异步刷新不阻塞 UI，支持定时刷新（默认 5 分钟）、悬停刷新（冷却 30 秒）、托盘手动刷新。
 
 ### Key Files
-- `src/api.rs` — API 调用
-- `src/main.rs` — fetch_usage(), start_refresh(), check_refresh_result()
+- `src/api.rs` — fetch_usage(), console_url(), format_level_line()
+- `src/widget.rs` — start_refresh(), check_refresh_result(), apply_refresh_result()
 
 ---
 
 ## 5. 悬停提示框
 
-**Verified**: 2026-06-15
+**Verified**: 2026-06-17
 
 ### Summary
-鼠标悬停在 widget 圆形区域时，展开显示各层级的用量详情和重置倒计时，拖拽时自动隐藏。
+鼠标悬停在 widget 圆形区域时，窗口自动扩展显示各层级的用量百分比和重置倒计时。提示框方位按优先级自适应（右下→左下→左上→右上），通过 Win32 `MonitorFromPoint`+`GetMonitorInfoW` 获取屏幕工作区；四个角都放不下时水平钳制到工作区内。拖拽时隐藏提示框。widget 本体屏幕位置始终稳定不跳动。
 
 ### Key Files
-- `src/main.rs` — format_level_line(), tooltip rendering
+- `src/widget.rs` — 提示框尺寸/方位计算、窗口几何与绘制（update() 中）
+- `src/screen.rs` — screen_info_for_point(), work_area_for_point()
 
 ---
 
 ## 6. Widget 拖拽
 
-**Verified**: 2026-06-15
+**Verified**: 2026-06-17
 
 ### Summary
-通过拖拽圆形区域移动 widget 位置，使用 lerp 平滑移动，拖拽结束后保存窗口位置。
+通过拖拽圆形区域移动 widget 位置。基于 `drag_anchor`（鼠标相对 widget 屏幕 home 的偏移）直接跟踪鼠标，与 OS 窗口命令延迟解耦。拖拽位置经 `clamp_home_to_work_area` 钳制（水平用显示器全屏矩形可贴边，垂直用工作区避开任务栏）。纯点击（位移 <4px）不触发磁盘保存。
 
 ### Key Files
-- `src/main.rs` — 自定义拖拽逻辑
+- `src/widget.rs` — drag_anchor, press_pos, DRAG_THRESHOLD, clamp_home_to_work_area()
+- `src/screen.rs` — screen_info_for_point() 返回 monitor + work_area
 
 ---
 
-## 7. 点击打开控制台
+## 7. 用量通知
 
-**Verified**: 2026-06-15
-
-### Summary
-点击 widget 圆形区域打开火山引擎控制台，URL 根据区域代码动态生成。
-
-### Key Files
-- `src/main.rs` — open_url(), console_url()
-
----
-
-## 8. 用量通知
-
-**Verified**: 2026-06-15
+**Verified**: 2026-06-17
 
 ### Summary
-当用量超过可配置阈值时发送通知，每个阈值周期只通知一次，设为 0 禁用通知。
+当用量超过可配置阈值时发送 Windows 通知（PowerShell NotifyIcon），每个阈值周期只通知一次，设为 0 禁用通知。
 
 ### Key Files
 - `src/main.rs` — show_usage_notification()
+- `src/widget.rs` — notification_sent 字段, apply_refresh_result() 阈值检查
 
 ---
 
-## 9. 开机自启
+## 8. 开机自启
 
-**Verified**: 2026-06-15
+**Verified**: 2026-06-17
 
 ### Summary
-可配置是否开机自动启动，通过 Windows 注册表实现。
+可配置是否开机自动启动，通过 Windows 注册表 `HKCU\...\Run` 实现。
 
 ### Key Files
 - `src/main.rs` — apply_auto_start()
 
 ---
 
-## 10. 浏览器 Cookie 自动提取
+## 9. 凭证获取
 
-**Verified**: 2026-06-15
+**Verified**: 2026-06-17
 
 ### Summary
-首次启动时自动从浏览器或 cookie 文件提取凭证，提取后自动保存到设置文件，已有凭证时不覆盖。
+凭证获取支持两条路径：(1) 启动时自动从 `console.volcengine.com_cookies.txt` cookie 文件读取（Netscape 格式）；(2) 设置面板"🌐 打开控制台"按钮触发 WebView2 登录窗口，登录后自动提取 Cookie/CSRF Token。已有凭证时启动自动提取不覆盖。设置面板提供"🗑 清理 Cookie"按钮。
 
 ### Key Files
-- `src/browser_cookies.rs` — try_extract_credentials()
-- `src/main.rs` — Settings::load()
+- `src/settings.rs` — try_load_from_cookie_file(), Settings::load()
+- `src/webview_login.rs` — try_extract_credentials() WebView2 登录流程
+- `src/widget.rs` — 设置面板中轮询 webview_receiver
+
+### Known Limitations
+- WebView2 登录 URL 硬编码为 `cn-beijing` 区域，未根据 `settings.region` 动态生成
 
 ---
 
-## 11. 设置与 Widget 完全分离
+## 10. 设置与 Widget 分离
 
-**Verified**: 2026-06-15
+**Verified**: 2026-06-17
 
 ### Summary
-设置面板和 widget 不能同时显示，打开设置时 widget 切换为设置模式，关闭设置后恢复 widget，模式切换时动态改变窗口装饰和大小。
+设置面板作为独立 popup window 显示（`show_viewport_immediate`），与 widget 窗口分离。widget 窗口透明背景（`clear_color` 返回 `[0,0,0,0]`，无黑色背景），设置窗口遮盖 widget。关闭设置后恢复 widget 交互并重新刷新。
 
 ### Key Files
-- `src/main.rs` — was_in_settings_mode 追踪模式切换
+- `src/widget.rs` — show_viewport_immediate, clear_color() 覆盖, SettingsViewportState
 
 ---
 
-## 12. 未配置状态特殊样式
+## 已移除功能
 
-**Verified**: 2026-06-15
+以下功能曾计划/实现，现已移除或简化（详见 requirements.md 对应条目的收敛说明）：
 
-### Summary
-当没有本地配置时，widget 显示特殊视觉样式（暗淡背景、虚线圆环、"?" 图标、"点击配置" 提示），支持拖拽和点击打开设置。
-
-### Key Files
-- `src/widget.rs` — is_configured() 分支渲染
-- `src/theme.rs` — ThemeColors 未配置配色字段
+- **点击打开控制台**（原功能 7）— 点击 widget 圆形区域的行为已改为打开设置面板（commit `7fc0588`）。控制台访问改为通过设置面板的 WebView2 登录按钮。
+- **未配置状态特殊样式**（原功能 12）— 已简化。未配置时不再显示虚线圆环/"? "图标/"点击配置"提示，改为在圆形右侧显示红色"未配置凭证"错误文字。`ThemeColors` 的 `unconfigured_*` 字段已移除。
+- **小/中/大三种尺寸**（原功能 1 子项）— 已收敛为固定 60×60 尺寸（commit `84aeb76`）。
+- **可选显示百分比开关**（原功能 1/3 子项）— 已移除，百分比现在总是居中显示。
+- **DPAPI 浏览器 cookie 提取**（原功能 10）— `browser_cookies.rs` 已被 `webview_login.rs`（WebView2 登录流程）替代（commit `af7a46f`）。

@@ -574,7 +574,7 @@ impl eframe::App for WidgetApp {
         let colors = self.settings.theme.colors();
         let mut visuals = ctx.style().visuals.clone();
         visuals.panel_fill = colors.bg_fill;
-        visuals.window_fill = Color32::from_rgb(0, 255, 255);
+        visuals.window_fill = Color32::TRANSPARENT;
         visuals.faint_bg_color = Color32::TRANSPARENT;
         visuals.extreme_bg_color = Color32::TRANSPARENT;
         visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, colors.widget_fg);
