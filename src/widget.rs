@@ -1111,26 +1111,6 @@ impl WidgetApp {
                         if *tab == 0 {
                             // ── 通用 ──
 
-                            // ── 区域 ──
-                            section(ui, "🌐 区域", &mut |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("区域代码")
-                                            .color(text_muted)
-                                            .font(egui::FontId::proportional(12.0)),
-                                    );
-                                    ui.add_sized(
-                                        egui::vec2(160.0, 20.0),
-                                        egui::TextEdit::singleline(&mut settings.region),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new("  例如: openai")
-                                            .color(text_muted)
-                                            .font(egui::FontId::proportional(11.0)),
-                                    );
-                                });
-                            });
-
                             // ── 刷新 ──
                             section(ui, "🔄 刷新", &mut |ui| {
                                 ui.horizontal(|ui| {
@@ -1214,6 +1194,27 @@ impl WidgetApp {
                             });
                         } else {
                             // ── Cookie ──
+
+                            // ── 区域 ──
+                            section(ui, "🌐 区域", &mut |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("区域代码")
+                                            .color(text_muted)
+                                            .font(egui::FontId::proportional(12.0)),
+                                    );
+                                    ui.add_sized(
+                                        egui::vec2(160.0, 20.0),
+                                        egui::TextEdit::singleline(&mut settings.region),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new("  例如: openai")
+                                            .color(text_muted)
+                                            .font(egui::FontId::proportional(11.0)),
+                                    );
+                                });
+                            });
+
                             section(ui, "🔑 凭证", &mut |ui| {
                                 ui.label(
                                     egui::RichText::new("Cookie")

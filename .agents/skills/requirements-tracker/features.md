@@ -36,7 +36,7 @@
 **Verified**: 2026-06-17
 
 ### Summary
-通过 `show_viewport_immediate` 弹出的独立 popup window（640×720，带标题栏，不可缩放），分为"通用"和"Cookie"两个签页。配置项包括 Cookie、CSRF Token、区域代码、刷新间隔、通知阈值、主题、开机自启。支持手动保存、未保存更改确认对话框，主题实时同步到 widget。点击 widget 圆形区域或托盘菜单"设置"均可打开。
+通过 `show_viewport_immediate` 弹出的独立 popup window（640×720，带标题栏，不可缩放），分为"通用"和"Cookie"两个签页。通用签页包含刷新间隔、通知阈值、主题、开机自启；Cookie 签页包含区域代码、Cookie、CSRF Token，以及"打开控制台"和"清理 Cookie"按钮。支持手动保存、未保存更改确认对话框，主题实时同步到 widget。点击 widget 圆形区域或托盘菜单"设置"均可打开。
 
 ### Key Files
 - `src/widget.rs` — render_settings_viewport(), show_viewport_immediate 调用, SettingsViewportState
