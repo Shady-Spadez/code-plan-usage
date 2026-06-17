@@ -615,10 +615,49 @@ impl eframe::App for WidgetApp {
                 )
             });
 
-        let widget_size = self.settings.widget_size.window_size();
         let cfg = self.settings.widget_size.config();
         let radius = cfg.circle_radius;
         let circle_x = 2.0 + radius + cfg.stroke_width / 2.0;
+
+        // Calculate the ACTUAL visible content width (circle + optional text) so
+        // the OS window tightly fits the widget. The old fixed 240px width left
+        // a large transparent gap on the right side of the window — when the
+        // window was clamped to the right screen edge, the visible content
+        // (circle + text, ~80px) was ~160px away from the edge.
+        let widget_size = {
+            let base = self.settings.widget_size.window_size();
+            let circle_right = circle_x + radius + cfg.stroke_width / 2.0 + 2.0;
+            let text_w = if let Some(ref err) = self.error {
+                let font_id = egui::FontId::proportional(cfg.error_font_size);
+                ctx.fonts(|f| {
+                    f.layout(err.clone(), font_id, Color32::TRANSPARENT, f32::INFINITY)
+                        .size()
+                        .x
+                })
+            } else if self.settings.show_percentage {
+                if let Some(pct) = self.get_monthly_percent() {
+                    let text = format!("{:.1}%", pct);
+                    let font_id = egui::FontId::proportional(cfg.percent_font_size);
+                    ctx.fonts(|f| {
+                        f.layout(text, font_id, Color32::TRANSPARENT, f32::INFINITY)
+                            .size()
+                            .x
+                    })
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+            let w = if text_w > 0.0 {
+                (circle_x + radius + 6.0 + text_w + 4.0).max(circle_right)
+            } else {
+                circle_right
+            };
+            // Ceil to avoid sub-pixel width changes causing unnecessary resizes
+            // when the percentage text changes.
+            egui::vec2(w.ceil(), base.y)
+        };
 
         // The widget's stable screen position ("home"). While the tooltip is
         // shown or the widget is being dragged we track this independently of the
@@ -763,18 +802,20 @@ impl eframe::App for WidgetApp {
                 }
                 if let Some(anchor) = self.drag_anchor {
                     let new_home = ms - anchor;
-                    // Use the ACTUAL window size (from outer_rect) for clamping,
-                    // not the configured widget_size. On high-DPI displays the
-                    // actual logical window size may differ from widget_size
-                    // (e.g. with_inner_size(240) can be interpreted as physical
-                    // pixels), and clamping with the wrong size leaves a gap
-                    // between the widget and the screen edge.
-                    let actual_size = viewport_rect
-                        .map(|r| r.size())
-                        .unwrap_or(widget_size);
+                    // `home` is the widget's top-left corner and the widget
+                    // itself only occupies `widget_size` (in egui points / logical
+                    // px, the same space as the monitor rect from screen.rs and
+                    // as `home`). Clamp with widget_size, NOT the actual OS
+                    // window size: right after the tooltip was shown the window
+                    // is still expanded to cover the tooltip (resize lag), so
+                    // `outer_rect.size()` == widget_size + tooltip_width and
+                    // clamping with it would subtract the tooltip width, leaving
+                    // a gap between the widget and the right screen edge. The
+                    // tooltip is clamped independently below (tip_screen_x), so
+                    // it never needs to factor into the widget's own clamp.
                     let clamped = clamp_home_to_work_area(
                         new_home,
-                        actual_size,
+                        widget_size,
                         ctx.pixels_per_point(),
                     );
                     home = Some(clamped);

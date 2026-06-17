@@ -57,7 +57,7 @@ impl WidgetSize {
     pub fn config(&self) -> SizeConfig {
         match self {
             WidgetSize::Small => SizeConfig {
-                dimensions: egui::vec2(240.0, 36.0),
+                dimensions: egui::vec2(72.0, 36.0),
                 circle_radius: 9.0,
                 circle_center_dot: 2.0,
                 stroke_width: 2.0,
@@ -65,7 +65,7 @@ impl WidgetSize {
                 error_font_size: 8.0,
             },
             WidgetSize::Medium => SizeConfig {
-                dimensions: egui::vec2(240.0, 48.0),
+                dimensions: egui::vec2(90.0, 48.0),
                 circle_radius: 12.0,
                 circle_center_dot: 3.0,
                 stroke_width: 2.5,
@@ -73,7 +73,7 @@ impl WidgetSize {
                 error_font_size: 10.0,
             },
             WidgetSize::Large => SizeConfig {
-                dimensions: egui::vec2(240.0, 60.0),
+                dimensions: egui::vec2(108.0, 60.0),
                 circle_radius: 15.0,
                 circle_center_dot: 4.0,
                 stroke_width: 3.0,
