@@ -107,6 +107,17 @@ pub struct WidgetApp {
     pub arc_points_cache: Vec<egui::Pos2>,
     /// Pre-computed tooltip lines (updated on each successful refresh).
     pub cached_level_lines: Vec<(String, Color32)>,
+    /// True while a silent WebView2 credential extraction is running.
+    pub silent_reauth_in_progress: bool,
+    /// Receiver for the silent reauth thread's result.
+    pub silent_reauth_receiver: Option<std::sync::mpsc::Receiver<Option<crate::webview_login::BrowserCredentials>>>,
+    /// True when the current refresh is a retry after silent reauth. If this
+    /// retry also fails, we show "Cookie 过期" instead of looping.
+    pub retry_after_reauth: bool,
+    /// Timestamp of the last silent reauth attempt (for cooldown).
+    pub last_silent_reauth: Option<Instant>,
+    /// Lazily-loaded faint logo texture drawn on top of the circle background.
+    pub logo_texture: Option<egui::TextureHandle>,
 }
 
 impl WidgetApp {
@@ -140,6 +151,11 @@ impl WidgetApp {
             settings_viewport_data: None,
             arc_points_cache: Vec::with_capacity(65),
             cached_level_lines: Vec::new(),
+            silent_reauth_in_progress: false,
+            silent_reauth_receiver: None,
+            retry_after_reauth: false,
+            last_silent_reauth: None,
+            logo_texture: None,
         }
     }
 
@@ -169,6 +185,10 @@ impl WidgetApp {
     fn start_refresh(&mut self) {
         if self.refresh_in_progress {
             debug_log!("start_refresh: already in progress, skipping");
+            return;
+        }
+        if self.silent_reauth_in_progress {
+            debug_log!("start_refresh: silent reauth in progress, skipping");
             return;
         }
         if !self.settings.is_configured() {
@@ -272,10 +292,36 @@ impl WidgetApp {
 
                 self.usage = Some(usage);
                 self.error = None;
+                self.retry_after_reauth = false;
             }
             Err(e) => {
                 debug_log!("API call FAILED: {}", e);
-                self.error = Some(e);
+
+                // Clear old progress — stale data shouldn't be shown after a failure
+                self.usage = None;
+                self.cached_level_lines.clear();
+
+                if self.retry_after_reauth {
+                    // Retry after silent reauth also failed
+                    self.retry_after_reauth = false;
+                    if is_likely_cookie_error(&e) {
+                        // Cookie error again — cookies are truly expired
+                        self.error = Some("Cookie 过期，请重新登录".to_string());
+                    } else {
+                        // Different error (e.g. network) — show the actual error
+                        self.error = Some(e);
+                    }
+                } else if is_likely_cookie_error(&e)
+                    && !self.silent_reauth_in_progress
+                    && self.can_start_silent_reauth()
+                {
+                    // Cookie-related error: silently try to refresh credentials from WebView2
+                    debug_log!("apply_refresh_result: starting silent reauth for cookie error");
+                    self.error = Some("正在重新获取凭证...".to_string());
+                    self.start_silent_reauth();
+                } else {
+                    self.error = Some(e);
+                }
             }
         }
 
@@ -288,6 +334,61 @@ impl WidgetApp {
             .and_then(|u| u.iter().find(|q| q.level == "monthly"))
             .map(|q| q.percent)
     }
+
+    /// Cooldown for silent reauth attempts (matches default refresh interval).
+    const SILENT_REAUTH_COOLDOWN: Duration = Duration::from_secs(300);
+
+    /// Returns true if enough time has passed since the last silent reauth attempt.
+    fn can_start_silent_reauth(&self) -> bool {
+        match self.last_silent_reauth {
+            Some(t) => t.elapsed() >= Self::SILENT_REAUTH_COOLDOWN,
+            None => true,
+        }
+    }
+
+    /// Start a silent WebView2 credential extraction in the background.
+    fn start_silent_reauth(&mut self) {
+        debug_log!("Starting silent reauth...");
+        self.silent_reauth_in_progress = true;
+        self.last_silent_reauth = Some(Instant::now());
+        let rx = crate::webview_login::try_silent_extract_credentials();
+        self.silent_reauth_receiver = Some(rx);
+    }
+
+    /// Check if the silent reauth has completed and apply the result.
+    /// Returns true if a result was applied.
+    fn check_silent_reauth_result(&mut self) -> bool {
+        if !self.silent_reauth_in_progress {
+            return false;
+        }
+        if let Some(ref rx) = self.silent_reauth_receiver {
+            if let Ok(result) = rx.try_recv() {
+                self.silent_reauth_in_progress = false;
+                self.silent_reauth_receiver = None;
+
+                if let Some(creds) = result {
+                    debug_log!("Silent reauth: credentials obtained, retrying fetch");
+                    self.settings.cookie = creds.cookie;
+                    self.settings.csrf_token = creds.csrf_token;
+                    self.settings.save();
+                    self.retry_after_reauth = true;
+                    self.start_refresh();
+                } else {
+                    debug_log!("Silent reauth: no credentials obtained");
+                    self.error = Some("Cookie 过期，请重新登录".to_string());
+                }
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// Check whether an error string is likely caused by cookie expiration
+/// (HTTP 401/403 or JSON parse failure — the latter happens when the API
+/// redirects to an HTML login page).
+fn is_likely_cookie_error(err: &str) -> bool {
+    err.starts_with("HTTP 401") || err.starts_with("HTTP 403") || err.starts_with("解析失败")
 }
 
 // ── eframe App ───────────────────────────────────────────────────────────────
@@ -345,7 +446,11 @@ impl eframe::App for WidgetApp {
             ctx.request_repaint();
         }
 
-        if self.refresh_in_progress {
+        if self.check_silent_reauth_result() {
+            ctx.request_repaint();
+        }
+
+        if self.refresh_in_progress || self.silent_reauth_in_progress {
             ctx.request_repaint();
         }
 
@@ -957,6 +1062,35 @@ impl eframe::App for WidgetApp {
         let colors = self.settings.theme.colors();
 
         painter.circle_filled(center, radius, colors.circle_bg);
+
+        // Faint platform logo watermark on the circle background.
+        if self.logo_texture.is_none() {
+            let bytes = include_bytes!("../assets/logo.png");
+            if let Ok(img) = image::load_from_memory(bytes) {
+                let rgba = img.to_rgba8();
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                let color_image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+                self.logo_texture = Some(ctx.load_texture(
+                    "volc-logo",
+                    color_image,
+                    egui::TextureOptions::LINEAR,
+                ));
+            } else {
+                debug_log!("Failed to decode embedded logo.png");
+            }
+        }
+        if let Some(ref tex) = self.logo_texture {
+            let logo_side = radius * 1.3;
+            let logo_rect = egui::Rect::from_center_size(center, egui::vec2(logo_side, logo_side));
+            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            let tint = Color32::from_rgba_unmultiplied(
+                colors.widget_fg.r(),
+                colors.widget_fg.g(),
+                colors.widget_fg.b(),
+                40,
+            );
+            painter.image(tex.id(), logo_rect, uv, tint);
+        }
 
         let percent = self.animated_percent;
         if percent > 0.0 {

@@ -24,10 +24,41 @@ const COOKIE_CHECK_SCRIPT: &str = r#"
 })();
 "#;
 
+const SILENT_COOKIE_CHECK_SCRIPT: &str = r#"
+(function() {
+    var checks = 0;
+    var maxChecks = 20;
+    var timer = setInterval(function() {
+        checks++;
+        if (document.cookie.indexOf('AccountID') !== -1) {
+            clearInterval(timer);
+            setTimeout(function() {
+                window.chrome.webview.postMessage('LOGIN_DETECTED');
+            }, 2000);
+        } else if (checks >= maxChecks) {
+            clearInterval(timer);
+            window.chrome.webview.postMessage('NO_LOGIN');
+        }
+    }, 500);
+})();
+"#;
+
 pub fn try_extract_credentials() -> mpsc::Receiver<Option<BrowserCredentials>> {
     debug_log!("WebView2: starting login window");
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || run_login_window(tx));
+    rx
+}
+
+/// Silently extract credentials from WebView2's cookie store without showing
+/// a visible window. Navigates to the target URL in a hidden WebView2 instance;
+/// if the user's browser session is still valid (cookies haven't expired on
+/// the server side), fresh cookies are extracted and returned. If the session
+/// has expired (redirected to login page), returns `None`.
+pub fn try_silent_extract_credentials() -> mpsc::Receiver<Option<BrowserCredentials>> {
+    debug_log!("WebView2: starting silent credential extraction");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || run_silent_extraction(tx));
     rx
 }
 
@@ -114,6 +145,14 @@ struct WindowData {
     fetching: bool,
 }
 
+struct SilentExtractionData {
+    #[allow(dead_code)]
+    controller: ICoreWebView2Controller,
+    tx_cell: Rc<RefCell<Option<Sender<Option<BrowserCredentials>>>>>,
+    #[allow(dead_code)]
+    fetching: bool,
+}
+
 fn run_login_window(tx: Sender<Option<BrowserCredentials>>) {
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
     unsafe { let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED); }
@@ -191,10 +230,10 @@ fn run_login_window(tx: Sender<Option<BrowserCredentials>>) {
         );
     }
 
-    inject_script(&webview);
+    inject_script(&webview, COOKIE_CHECK_SCRIPT);
 
     let tx_cell = Rc::new(RefCell::new(Some(tx)));
-    setup_message_handler(&webview, tx_cell, hwnd);
+    setup_message_handler(&webview, tx_cell, hwnd, false);
 
     unsafe {
         let url = windows::core::HSTRING::from(TARGET_URL);
@@ -274,6 +313,176 @@ unsafe extern "system" fn wndproc(
     }
 }
 
+const SILENT_TIMEOUT_TIMER_ID: usize = 100;
+const SILENT_TIMEOUT_MS: u32 = 20000;
+
+fn run_silent_extraction(tx: Sender<Option<BrowserCredentials>>) {
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    unsafe { let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED); }
+
+    let class_name = windows::core::w!("CodingPlanSilentWindow");
+    let hinstance = unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap() };
+
+    let wnd_class = windows::Win32::UI::WindowsAndMessaging::WNDCLASSW {
+        lpfnWndProc: Some(silent_wndproc),
+        hInstance: hinstance.into(),
+        lpszClassName: class_name,
+        ..Default::default()
+    };
+
+    unsafe { windows::Win32::UI::WindowsAndMessaging::RegisterClassW(&wnd_class); }
+
+    let hwnd = match unsafe {
+        windows::Win32::UI::WindowsAndMessaging::CreateWindowExW(
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE::default(),
+            class_name,
+            windows::core::w!(""),
+            windows::Win32::UI::WindowsAndMessaging::WS_OVERLAPPEDWINDOW,
+            0, 0, 1, 1,
+            None, None, hinstance, None,
+        )
+    } {
+        Ok(h) => h,
+        Err(e) => {
+            debug_log!("WebView2: silent extraction window failed: {:?}", e);
+            let _ = tx.send(None);
+            return;
+        }
+    };
+
+    let env = match create_env() {
+        Ok(e) => e,
+        Err(e) => {
+            debug_log!("WebView2: silent extraction env failed: {:?}", e);
+            let _ = tx.send(None);
+            return;
+        }
+    };
+
+    let (controller, webview) = match create_controller(hwnd, &env) {
+        Ok(c) => c,
+        Err(e) => {
+            debug_log!("WebView2: silent extraction controller failed: {:?}", e);
+            let _ = tx.send(None);
+            return;
+        }
+    };
+
+    debug_log!("WebView2: silent extraction controller created");
+
+    unsafe {
+        controller.SetIsVisible(false).ok();
+        let _ = controller.SetBounds(windows::Win32::Foundation::RECT {
+            left: 0, top: 0, right: 1, bottom: 1,
+        });
+    }
+
+    let tx_cell = Rc::new(RefCell::new(Some(tx)));
+
+    let window_data = Box::into_raw(Box::new(SilentExtractionData {
+        controller,
+        tx_cell: tx_cell.clone(),
+        fetching: false,
+    }));
+    unsafe {
+        let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
+            hwnd,
+            windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
+            window_data as isize,
+        );
+    }
+
+    inject_script(&webview, SILENT_COOKIE_CHECK_SCRIPT);
+    setup_message_handler(&webview, tx_cell, hwnd, true);
+
+    unsafe {
+        let url = windows::core::HSTRING::from(TARGET_URL);
+        let _ = webview.Navigate(&url);
+    }
+
+    unsafe {
+        let _ = windows::Win32::UI::WindowsAndMessaging::SetTimer(
+            hwnd,
+            SILENT_TIMEOUT_TIMER_ID,
+            SILENT_TIMEOUT_MS,
+            None,
+        );
+    }
+
+    debug_log!("WebView2: silent extraction entering message loop");
+    let mut msg = windows::Win32::UI::WindowsAndMessaging::MSG::default();
+    loop {
+        let ret = unsafe { windows::Win32::UI::WindowsAndMessaging::GetMessageW(&mut msg, None, 0, 0) };
+        if ret.0 == 0 || ret.0 == -1 {
+            break;
+        }
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::TranslateMessage(&msg);
+            let _ = windows::Win32::UI::WindowsAndMessaging::DispatchMessageW(&msg);
+        }
+    }
+    debug_log!("WebView2: silent extraction message loop exited");
+
+    // Safety net: if we exit the loop without having sent a result, send None
+    let ptr = unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA) };
+    if ptr != 0 {
+        let data = unsafe { &mut *(ptr as *mut SilentExtractionData) };
+        if let Some(tx) = data.tx_cell.borrow_mut().take() {
+            let _ = tx.send(None);
+        }
+    }
+}
+
+unsafe extern "system" fn silent_wndproc(
+    hwnd: windows::Win32::Foundation::HWND,
+    msg: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DefWindowProcW, KillTimer, WM_CLOSE, WM_DESTROY, WM_TIMER, GWLP_USERDATA,
+    };
+
+    match msg {
+        WM_TIMER => {
+            if wparam.0 == SILENT_TIMEOUT_TIMER_ID {
+                debug_log!("WebView2: silent extraction timed out");
+                let _ = unsafe { KillTimer(hwnd, SILENT_TIMEOUT_TIMER_ID) };
+                let ptr = unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
+                if ptr != 0 {
+                    let data = unsafe { &mut *(ptr as *mut SilentExtractionData) };
+                    if let Some(tx) = data.tx_cell.borrow_mut().take() {
+                        let _ = tx.send(None);
+                    }
+                }
+                unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) }.ok();
+            }
+            windows::Win32::Foundation::LRESULT(0)
+        }
+        WM_CLOSE => {
+            unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) }.ok();
+            windows::Win32::Foundation::LRESULT(0)
+        }
+        WM_DESTROY => {
+            let ptr = unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
+            if ptr != 0 {
+                // Clear GWLP_USERDATA before freeing to prevent dangling pointer access
+                unsafe {
+                    let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
+                        hwnd,
+                        GWLP_USERDATA,
+                        0,
+                    );
+                }
+                let _ = unsafe { Box::from_raw(ptr as *mut SilentExtractionData) };
+            }
+            unsafe { windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0) };
+            windows::Win32::Foundation::LRESULT(0)
+        }
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
 fn get_cookie_manager(webview: &ICoreWebView2) -> Option<ICoreWebView2CookieManager> {
     let webview2: ICoreWebView2_2 = match webview.cast() {
         Ok(wv) => wv,
@@ -342,12 +551,12 @@ fn create_controller(
     Ok((controller, webview))
 }
 
-fn inject_script(webview: &ICoreWebView2) {
+fn inject_script(webview: &ICoreWebView2, script: &'static str) {
     let (tx, rx) = mpsc::channel();
     let wv = Rc::new(webview.clone());
     let result = AddScriptToExecuteOnDocumentCreatedCompletedHandler::wait_for_async_operation(
         Box::new(move |handler| unsafe {
-            let js = windows::core::HSTRING::from(COOKIE_CHECK_SCRIPT);
+            let js = windows::core::HSTRING::from(script);
             wv.AddScriptToExecuteOnDocumentCreated(&js, &handler)
                 .map_err(webview2_com::Error::WindowsError)
         }),
@@ -370,6 +579,7 @@ fn setup_message_handler(
     webview: &ICoreWebView2,
     tx_cell: Rc<RefCell<Option<Sender<Option<BrowserCredentials>>>>>,
     hwnd: windows::Win32::Foundation::HWND,
+    is_silent: bool,
 ) {
     let cookie_manager = match get_cookie_manager(webview) {
         Some(cm) => Rc::new(cm),
@@ -386,7 +596,9 @@ fn setup_message_handler(
 
                     if message == "LOGIN_DETECTED" {
                         debug_log!("WebView2: login detected, fetching cookies");
-                        set_fetching(hwnd, true);
+                        if !is_silent {
+                            set_fetching(hwnd, true);
+                        }
 
                         let cm = cookie_manager.clone();
                         let tx_cell = tx_cell.clone();
@@ -410,7 +622,13 @@ fn setup_message_handler(
                                 } else {
                                     debug_log!("WebView2: GetCookies failed: {:?}", result.err());
                                 }
-                                set_fetching(hwnd, false);
+                                if !is_silent {
+                                    set_fetching(hwnd, false);
+                                }
+                                // In silent mode, destroy the window after extracting cookies
+                                if is_silent {
+                                    unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) }.ok();
+                                }
                                 Ok(())
                             }
                         ));
@@ -419,6 +637,15 @@ fn setup_message_handler(
                             if let Err(e) = cm.GetCookies(&uri, &callback) {
                                 debug_log!("WebView2: GetCookies call failed: {:?}", e);
                             }
+                        }
+                    } else if message == "NO_LOGIN" {
+                        debug_log!("WebView2: no login detected (session expired)");
+                        if let Some(tx) = tx_cell.borrow_mut().take() {
+                            let _ = tx.send(None);
+                        }
+                        // In silent mode, destroy the window after sending result
+                        if is_silent {
+                            unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) }.ok();
                         }
                     }
                 }
