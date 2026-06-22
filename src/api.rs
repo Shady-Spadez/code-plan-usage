@@ -48,13 +48,25 @@ pub struct QuotaLevel {
 
 // ── Formatting ────────────────────────────────────────────────────────────────
 
+/// Normalize a reset timestamp to seconds. The API may return either
+/// millisecond or second timestamps; values above 10^12 are treated as ms.
+fn reset_timestamp_secs(ts: i64) -> i64 {
+    if ts > 1_000_000_000_000 {
+        ts / 1000
+    } else {
+        ts
+    }
+}
+
+/// Returns true if the quota's reset timestamp has passed — i.e. the quota
+/// should already have been reset, so a fresh fetch is worthwhile.
+pub fn is_reset_expired(level: &QuotaLevel) -> bool {
+    reset_timestamp_secs(level.reset_timestamp) <= Utc::now().timestamp()
+}
+
 pub fn format_level_line(level: &QuotaLevel) -> (&'static str, String) {
     let now = Utc::now().timestamp();
-    let reset_timestamp = if level.reset_timestamp > 1_000_000_000_000 {
-        level.reset_timestamp / 1000
-    } else {
-        level.reset_timestamp
-    };
+    let reset_timestamp = reset_timestamp_secs(level.reset_timestamp);
     let remaining = (reset_timestamp - now).max(0) as u64;
 
     let days = remaining / 86400;
@@ -62,9 +74,9 @@ pub fn format_level_line(level: &QuotaLevel) -> (&'static str, String) {
     let minutes = (remaining % 3600) / 60;
 
     let countdown = if days > 0 {
-        format!("{}天{:02}时{:02}分钟后刷新", days, hours, minutes)
+        format!("{}天{:02}时{:02}分钟后重置", days, hours, minutes)
     } else {
-        format!("{:02}时{:02}分钟后刷新", hours, minutes)
+        format!("{:02}时{:02}分钟后重置", hours, minutes)
     };
 
     match level.level.as_str() {
@@ -231,6 +243,50 @@ mod tests {
         };
         let (_label, countdown) = format_level_line(&level);
         assert!(countdown.contains("00时00分"));
+    }
+
+    #[test]
+    fn test_is_reset_expired_future() {
+        let now = Utc::now().timestamp();
+        let level = QuotaLevel {
+            level: "monthly".to_string(),
+            percent: 42.0,
+            reset_timestamp: now + 3600,
+        };
+        assert!(!is_reset_expired(&level));
+    }
+
+    #[test]
+    fn test_is_reset_expired_past() {
+        let now = Utc::now().timestamp();
+        let level = QuotaLevel {
+            level: "monthly".to_string(),
+            percent: 42.0,
+            reset_timestamp: now - 3600,
+        };
+        assert!(is_reset_expired(&level));
+    }
+
+    #[test]
+    fn test_is_reset_expired_millisecond_future() {
+        let now = Utc::now().timestamp();
+        let level = QuotaLevel {
+            level: "monthly".to_string(),
+            percent: 42.0,
+            reset_timestamp: (now + 3600) * 1000,
+        };
+        assert!(!is_reset_expired(&level));
+    }
+
+    #[test]
+    fn test_is_reset_expired_millisecond_past() {
+        let now = Utc::now().timestamp();
+        let level = QuotaLevel {
+            level: "monthly".to_string(),
+            percent: 42.0,
+            reset_timestamp: (now - 3600) * 1000,
+        };
+        assert!(is_reset_expired(&level));
     }
 
     #[test]

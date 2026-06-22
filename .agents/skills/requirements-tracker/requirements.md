@@ -95,12 +95,14 @@
 - [x] 定时刷新（可配置间隔，默认 5 分钟）
 - [x] 悬停时触发刷新（冷却时间 30 秒）
 - [x] 手动刷新（托盘菜单）
+- [x] 配额重置时间到达后自动触发刷新（冷却 60 秒，避免 API 返回过期时间戳导致频繁刷新）
 - [x] 错误处理和显示
 
 ### Implementation Notes
-- `src/widget.rs`: start_refresh(), check_refresh_result(), apply_refresh_result()
-- `src/api.rs`: fetch_usage(), console_url()
+- `src/widget.rs`: start_refresh(), check_refresh_result(), apply_refresh_result(), needs_reset_refresh(), needs_reset_refresh()
+- `src/api.rs`: fetch_usage(), console_url(), is_reset_expired(), reset_timestamp_secs()
 - API URL: `https://console.volcengine.com/api/top/ark/{region}/2024-01-01/GetCodingPlanUsage`
+- 倒计时文案为"X天后重置"/"X时X分后重置"（配额重置倒计时，非数据刷新倒计时）；当任一配额的 reset_timestamp 已过且距上次刷新 ≥60s 时触发 `needs_reset_refresh()`
 
 ---
 

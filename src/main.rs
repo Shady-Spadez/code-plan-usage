@@ -20,6 +20,9 @@ use crate::widget::WidgetApp;
 
 const DEFAULT_REFRESH_INTERVAL: Duration = Duration::from_secs(300); // 5 minutes
 const HOVER_COOLDOWN: Duration = Duration::from_secs(30); // min interval between hover refreshes
+// Min interval between refreshes triggered by an expired quota reset timestamp.
+// Prevents tight refresh loops when the API returns an already-past reset time.
+const RESET_REFRESH_COOLDOWN: Duration = Duration::from_secs(60);
 
 // ── Notifications ────────────────────────────────────────────────────────────
 

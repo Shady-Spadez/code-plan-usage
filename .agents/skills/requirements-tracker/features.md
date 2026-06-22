@@ -49,7 +49,7 @@
 **Verified**: 2026-06-17
 
 ### Summary
-从火山引擎 `GetCodingPlanUsage` API 获取用量数据，支持配置区域代码。后台线程异步刷新不阻塞 UI，支持定时刷新（默认 5 分钟）、悬停刷新（冷却 30 秒）、托盘手动刷新。
+从火山引擎 `GetCodingPlanUsage` API 获取用量数据，支持配置区域代码。后台线程异步刷新不阻塞 UI，支持定时刷新（默认 5 分钟）、悬停刷新（冷却 30 秒）、托盘手动刷新、配额重置触发刷新（冷却 60 秒）。
 
 ### Key Files
 - `src/api.rs` — fetch_usage(), console_url(), format_level_line()

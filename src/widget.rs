@@ -6,11 +6,11 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use eframe::glow::HasContext as _;
 
-use crate::api::{fetch_usage, format_level_line, QuotaLevel};
+use crate::api::{fetch_usage, format_level_line, is_reset_expired, QuotaLevel};
 use crate::debug_log;
 use crate::settings::Settings;
 use crate::theme::{percent_color, widget_config, widget_window_size, Theme};
-use crate::{DEFAULT_REFRESH_INTERVAL, HOVER_COOLDOWN, show_usage_notification};
+use crate::{DEFAULT_REFRESH_INTERVAL, HOVER_COOLDOWN, RESET_REFRESH_COOLDOWN, show_usage_notification};
 
 #[cfg(windows)]
 use crate::apply_auto_start;
@@ -146,6 +146,22 @@ impl WidgetApp {
     fn needs_periodic_refresh(&self) -> bool {
         self.last_refresh.elapsed()
             >= Duration::from_secs(self.settings.refresh_interval_secs.max(30))
+    }
+
+    /// Returns true when a quota's reset timestamp has already passed, meaning
+    /// the quota should have been reset and a fresh fetch is worthwhile. A
+    /// cooldown (`RESET_REFRESH_COOLDOWN`) prevents tight loops when the API
+    /// keeps returning an already-past reset time.
+    fn needs_reset_refresh(&self) -> bool {
+        if self.refresh_in_progress {
+            return false;
+        }
+        if self.last_refresh.elapsed() < RESET_REFRESH_COOLDOWN {
+            return false;
+        }
+        self.usage
+            .as_ref()
+            .is_some_and(|usage| usage.iter().any(is_reset_expired))
     }
 
     /// Start a background refresh if one isn't already in progress.
@@ -584,6 +600,12 @@ impl eframe::App for WidgetApp {
         if self.needs_periodic_refresh() {
             debug_log!(
                 "Periodic refresh triggered (elapsed: {}s)",
+                self.last_refresh.elapsed().as_secs()
+            );
+            self.start_refresh();
+        } else if self.needs_reset_refresh() {
+            debug_log!(
+                "Reset refresh triggered (quota reset time reached, elapsed: {}s)",
                 self.last_refresh.elapsed().as_secs()
             );
             self.start_refresh();
