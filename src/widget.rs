@@ -265,7 +265,7 @@ impl WidgetApp {
                                 monthly_pct,
                                 threshold
                             );
-                            show_usage_notification(monthly_pct, threshold);
+                            show_usage_notification("Coding Plan Widget", monthly_pct, threshold);
                         } else if monthly_pct < threshold {
                             if self.notification_sent {
                                 debug_log!(
@@ -588,7 +588,7 @@ impl eframe::App for WidgetApp {
                                         if ui.add(save_btn).clicked() {
                                             s.borrow().save();
                                             #[cfg(windows)]
-                                            apply_auto_start(s.borrow().auto_start);
+                                            apply_auto_start("CodingPlanWidget", s.borrow().auto_start);
                                             sv.set(true);
                                             sc.set(true);
                                         }
@@ -659,7 +659,7 @@ impl eframe::App for WidgetApp {
                         if saved.get() {
                             self.settings = state.settings.borrow().clone();
                             self.settings.save();
-                            apply_auto_start(self.settings.auto_start);
+                            apply_auto_start("CodingPlanWidget", self.settings.auto_start);
                         } else {
                             // Revert to original settings
                             self.settings = state.original_settings.borrow().clone();
@@ -1460,7 +1460,7 @@ impl WidgetApp {
                                     debug_log!("Settings: save & close clicked");
                                     settings.save();
                                     #[cfg(windows)]
-                                    apply_auto_start(settings.auto_start);
+                                    apply_auto_start("CodingPlanWidget", settings.auto_start);
                                     *notif = false;
                                     *saved = true;
                                     *close_requested = true;

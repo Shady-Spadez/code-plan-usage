@@ -3,6 +3,18 @@ name = "coding-plan-widget"
 version = "0.2.0"
 edition = "2021"
 
+[lib]
+name = "coding_plan_widget"
+path = "src/lib.rs"
+
+[[bin]]
+name = "coding-plan-widget"
+path = "src/main.rs"
+
+[[bin]]
+name = "coding-plan-widget-coconut"
+path = "src/bin/coconut.rs"
+
 [dependencies]
 eframe = "0.31"
 egui = "0.31"

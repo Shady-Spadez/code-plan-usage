@@ -3,12 +3,12 @@ pub mod tray {
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Mutex, OnceLock};
     use tray_icon::{
         menu::{Menu, MenuEvent, MenuItem},
         Icon, TrayIcon, TrayIconBuilder, TrayIconEvent,
     };
-    use windows::core::PCWSTR;
+    use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::UI::WindowsAndMessaging::{
         FindWindowW, IsWindowVisible, PostMessageW, ShowWindow, SW_HIDE, SW_SHOW, WM_USER,
     };
@@ -34,6 +34,9 @@ pub mod tray {
     /// Flag set by the Settings menu callback; checked in the eframe update loop.
     pub static SETTINGS_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+    /// Window title set by `init_tray`. Used to find the widget window.
+    static WIDGET_TITLE: OnceLock<String> = OnceLock::new();
+
     fn push_command(cmd: TrayCommand) {
         if let Ok(mut queue) = EVENT_QUEUE.lock() {
             queue.push_back(cmd);
@@ -42,9 +45,10 @@ pub mod tray {
 
     /// Find the main widget window by title and toggle its visibility.
     fn toggle_window_visibility() {
-        let title = windows::core::w!("Coding Plan Widget");
+        let title = WIDGET_TITLE.get().map(|s| s.as_str()).unwrap_or("");
+        let htitle = HSTRING::from(title);
         unsafe {
-            if let Ok(hwnd) = FindWindowW(PCWSTR::null(), title) {
+            if let Ok(hwnd) = FindWindowW(PCWSTR::null(), &htitle) {
                 let visible = IsWindowVisible(hwnd).as_bool();
                 debug_log!(
                     "Tray: toggle visibility (was visible={}) -> {}",
@@ -65,9 +69,10 @@ pub mod tray {
 
     /// Ensure the main widget window is visible (used before opening settings).
     fn show_window() {
-        let title = windows::core::w!("Coding Plan Widget");
+        let title = WIDGET_TITLE.get().map(|s| s.as_str()).unwrap_or("");
+        let htitle = HSTRING::from(title);
         unsafe {
-            if let Ok(hwnd) = FindWindowW(PCWSTR::null(), title) {
+            if let Ok(hwnd) = FindWindowW(PCWSTR::null(), &htitle) {
                 if !IsWindowVisible(hwnd).as_bool() {
                     debug_log!("Tray: showing window for settings");
                     let _ = ShowWindow(hwnd, SW_SHOW);
@@ -80,20 +85,17 @@ pub mod tray {
     }
 
     /// Clean up the tray icon and exit the process.
-    /// Called directly from the menu event handler so it works even when
-    /// the main window is hidden (and the eframe update loop is paused).
     fn cleanup_and_exit() {
         debug_log!("Tray: exit requested, cleaning up and exiting");
-        // NOTE: We do NOT drop the TrayIcon here because we are inside
-        // the menu event handler callback (menu_subclass_proc), which
-        // already holds a borrow on muda's internal RefCell. Dropping
-        // the TrayIcon (and thus the Menu) would trigger a double-borrow
-        // panic. The OS will clean up the tray icon when the process
-        // exits, so this is safe.
         std::process::exit(0);
     }
 
-    pub fn init_tray() {
+    /// Initialize the system tray with the given window title and tray tooltip.
+    /// The icon is a simple green circle; override `widget_title` to match the
+    /// eframe window title so that show/hide can find the correct HWND.
+    pub fn init_tray(widget_title: &str, tooltip: &str) {
+        let _ = WIDGET_TITLE.set(widget_title.to_string());
+
         let icon = create_icon();
 
         let show_hide = MenuItem::new("显示/隐藏", true, None);
@@ -106,9 +108,6 @@ pub mod tray {
         let settings_id = settings.id().clone();
         let exit_id = exit.id().clone();
 
-        // Handle all menu commands directly in the callback so they work
-        // even when the main window is hidden and the eframe update loop
-        // is not running.
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             if event.id == exit_id {
                 debug_log!("Tray menu: exit clicked");
@@ -123,7 +122,7 @@ pub mod tray {
             if event.id == settings_id {
                 debug_log!("Tray menu: settings clicked");
                 SETTINGS_REQUESTED.store(true, Ordering::SeqCst);
-                show_window(); // ensure window is visible so update() runs
+                show_window();
                 return;
             }
             if event.id == refresh_id {
@@ -132,7 +131,6 @@ pub mod tray {
             }
         }));
 
-        // Left-click on tray icon toggles window visibility.
         TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| match event {
             TrayIconEvent::Click { .. } => {
                 debug_log!("Tray icon: left-click (toggle visibility)");
@@ -147,10 +145,11 @@ pub mod tray {
         let _ = menu.append(&settings);
         let _ = menu.append(&exit);
 
+        let ttip = tooltip.to_string();
         match TrayIconBuilder::new()
             .with_icon(icon)
             .with_menu(Box::new(menu))
-            .with_tooltip("Coding Plan Widget")
+            .with_tooltip(ttip)
             .build()
         {
             Ok(tray) => {
@@ -165,7 +164,6 @@ pub mod tray {
     }
 
     pub fn check_events() -> Option<TrayCommand> {
-        // Poll from the event queue populated by the set_event_handler callbacks.
         if let Ok(mut queue) = EVENT_QUEUE.lock() {
             queue.pop_front()
         } else {
@@ -186,13 +184,11 @@ pub mod tray {
                 let dist = (dx * dx + dy * dy).sqrt();
 
                 if dist <= radius {
-                    // Green circle
                     rgba.push(76);
                     rgba.push(175);
                     rgba.push(80);
                     rgba.push(255);
                 } else {
-                    // Transparent
                     rgba.push(0);
                     rgba.push(0);
                     rgba.push(0);

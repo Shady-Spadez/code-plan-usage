@@ -1,39 +1,38 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[path = "coconut/api.rs"]
 mod api;
+#[path = "coconut/settings.rs"]
 mod settings;
 #[cfg(windows)]
+#[path = "coconut/webview_login.rs"]
 mod webview_login;
+#[path = "coconut/widget.rs"]
 mod widget;
 
 use eframe::egui;
 
-// Import + re-export shared library items for use by sub-modules (widget.rs etc.).
-pub use coding_plan_widget::{
-    debug_log, screen, theme,
-    DEFAULT_REFRESH_INTERVAL, HOVER_COOLDOWN, RESET_REFRESH_COOLDOWN,
-    show_usage_notification, apply_auto_start, setup_cjk_font,
-    log,
+use coding_plan_widget::{
+    apply_auto_start, debug_log, setup_cjk_font,
+    theme, tray,
 };
-#[cfg(windows)]
-pub use coding_plan_widget::tray;
 
-use crate::settings::Settings;
-use crate::widget::WidgetApp;
+use crate::settings::CoconutSettings;
+use crate::widget::CoconutApp;
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 fn main() -> eframe::Result {
-    log::init_logger();
-    debug_log!("=== Coding Plan Widget starting ===");
+    coding_plan_widget::log::init_logger();
+    debug_log!("=== Coconut Plan Widget starting ===");
     #[cfg(windows)]
-    tray::tray::init_tray("Coding Plan Widget", "Coding Plan Widget");
+    tray::tray::init_tray("Coconut Plan Widget", "Coconut Plan Widget");
 
-    let settings = Settings::load();
-    debug_log!("Settings loaded: configured={}", settings.is_configured());
+    let settings = CoconutSettings::load();
+    debug_log!("Coconut settings loaded: configured={}", settings.is_configured());
 
     #[cfg(windows)]
-    apply_auto_start("CodingPlanWidget", settings.auto_start);
+    apply_auto_start("CoconutPlanWidget", settings.auto_start);
 
     let initial_size = theme::widget_window_size();
 
@@ -55,11 +54,11 @@ fn main() -> eframe::Result {
     };
 
     eframe::run_native(
-        "Coding Plan Widget",
+        "Coconut Plan Widget",
         options,
         Box::new(move |cc| {
             setup_cjk_font(&cc.egui_ctx);
-            Ok(Box::new(WidgetApp::with_settings(settings)))
+            Ok(Box::new(CoconutApp::with_settings(settings)))
         }),
     )
 }
