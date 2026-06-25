@@ -12,7 +12,7 @@ mod widget;
 
 use eframe::egui;
 
-use coding_plan_widget::{
+use coding_plan_widget_shared::{
     apply_auto_start, debug_log, setup_cjk_font,
     theme, tray,
 };
@@ -23,10 +23,10 @@ use crate::widget::CoconutApp;
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 fn main() -> eframe::Result {
-    coding_plan_widget::log::init_logger();
+    coding_plan_widget_shared::log::init_logger();
     debug_log!("=== Coconut Plan Widget starting ===");
     #[cfg(windows)]
-    tray::tray::init_tray("Coconut Plan Widget", "Coconut Plan Widget");
+    tray::init_tray("Coconut Plan Widget", "Coconut Plan Widget");
 
     let settings = CoconutSettings::load();
     debug_log!("Coconut settings loaded: configured={}", settings.is_configured());

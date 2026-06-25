@@ -1,6 +1,4 @@
-#[cfg(windows)]
-pub mod tray {
-    use std::cell::RefCell;
+use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Mutex, OnceLock};
@@ -28,7 +26,7 @@ pub mod tray {
     // Stores the tray icon so it can be explicitly dropped to remove it
     // from the system tray before the process exits.
     thread_local! {
-        static TRAY_ICON: RefCell<Option<TrayIcon>> = RefCell::new(None);
+        static TRAY_ICON: RefCell<Option<TrayIcon>> = const { RefCell::new(None) };
     }
 
     /// Flag set by the Settings menu callback; checked in the eframe update loop.
@@ -131,12 +129,11 @@ pub mod tray {
             }
         }));
 
-        TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| match event {
-            TrayIconEvent::Click { .. } => {
+        TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+            if let TrayIconEvent::Click { .. } = event {
                 debug_log!("Tray icon: left-click (toggle visibility)");
                 toggle_window_visibility()
             }
-            _ => {}
         }));
 
         let menu = Menu::new();
@@ -199,4 +196,3 @@ pub mod tray {
 
         Icon::from_rgba(rgba, size, size).expect("Failed to create tray icon from RGBA data")
     }
-}

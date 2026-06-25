@@ -10,6 +10,8 @@ pub mod theme;
 #[cfg(windows)]
 pub mod tray;
 
+pub mod widgets;
+
 use eframe::egui;
 use std::time::Duration;
 

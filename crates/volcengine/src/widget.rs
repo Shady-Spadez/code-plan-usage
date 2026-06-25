@@ -1,21 +1,24 @@
 use eframe::egui;
-use egui::epaint::PathShape;
-use egui::{Color32, Pos2, Shape, Stroke};
+use egui::{Color32, Stroke};
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 use eframe::glow::HasContext as _;
 
 use crate::api::{fetch_usage, format_level_line, is_reset_expired, QuotaLevel};
-use crate::debug_log;
 use crate::settings::Settings;
-use crate::theme::{percent_color, widget_config, widget_window_size, Theme};
-use crate::{DEFAULT_REFRESH_INTERVAL, HOVER_COOLDOWN, RESET_REFRESH_COOLDOWN, show_usage_notification};
-
+use coding_plan_widget_shared::debug_log;
+use coding_plan_widget_shared::theme::{percent_color, widget_config, widget_window_size};
+use coding_plan_widget_shared::{DEFAULT_REFRESH_INTERVAL, HOVER_COOLDOWN, RESET_REFRESH_COOLDOWN, show_usage_notification};
+use coding_plan_widget_shared::widgets::{
+    DragState, clamp_home_to_work_area, draw_widget_circle,
+    compute_tooltip_placement,
+    query_framebuffer_alpha, render_common_general_tab,
+};
 #[cfg(windows)]
-use crate::apply_auto_start;
+use coding_plan_widget_shared::apply_auto_start;
 #[cfg(windows)]
-use crate::tray;
+use coding_plan_widget_shared::tray;
 
 // ── Widget State ─────────────────────────────────────────────────────────────
 
@@ -23,29 +26,6 @@ use crate::tray;
 /// circle is treated as a drag instead of a click. Prevents the window from
 /// resizing (tooltip hide) during a pure click, which broke `button_clicked`.
 const DRAG_THRESHOLD: f32 = 4.0;
-
-/// Clamp a widget home position so the whole widget (size `ws`) stays on its
-/// monitor and off the taskbar. Horizontally the widget may touch the screen
-/// edges (uses the full monitor rect, not the work area, so it isn't kept away
-/// from the left/right edges); vertically it's clamped to the work area to
-/// avoid the taskbar. Falls back to the input position when screen info is
-/// unavailable.
-fn clamp_home_to_work_area(home: egui::Pos2, ws: egui::Vec2, ppp: f32) -> egui::Pos2 {
-    match crate::screen::screen_info_for_point(home, ppp) {
-        Some(info) => {
-            // X: full monitor (widget can touch left/right screen edges).
-            let x = home
-                .x
-                .clamp(info.monitor.min.x, (info.monitor.max.x - ws.x).max(info.monitor.min.x));
-            // Y: work area (keep off the taskbar).
-            let y = home
-                .y
-                .clamp(info.work_area.min.y, (info.work_area.max.y - ws.y).max(info.work_area.min.y));
-            egui::pos2(x, y)
-        }
-        None => home,
-    }
-}
 
 /// Shared state for the settings viewport (Rc<RefCell<>> so it persists across frames).
 #[cfg(windows)]
@@ -64,7 +44,7 @@ pub struct WidgetApp {
     pub error: Option<String>,
     pub last_refresh: Instant,
     pub was_hovered: bool,
-    pub is_dragging: bool,
+    pub drag: DragState,
     pub show_settings: bool,
     pub notification_sent: bool,
     pub animated_percent: f64,
@@ -72,21 +52,6 @@ pub struct WidgetApp {
     pub color_key_applied: bool,
     #[cfg(debug_assertions)]
     pub frame_count: u64,
-    /// Drag anchor: offset from the widget's screen position (home) to the mouse,
-    /// captured at drag start. The widget is dragged by tracking `mouse - anchor`.
-    pub drag_anchor: Option<egui::Vec2>,
-    /// Mouse position (screen coords) captured when the primary button was
-    /// pressed while hovering the circle. Dragging only engages after the mouse
-    /// moves more than `DRAG_THRESHOLD` px from this point, so a pure click
-    /// (press+release without moving) doesn't shrink the window / hide the
-    /// tooltip mid-click (which used to break `button_clicked`).
-    pub press_pos: Option<egui::Pos2>,
-    /// Last known mouse position in screen coordinates, carried across frames.
-    /// When the window is moved by tooltip geometry (no real mouse movement),
-    /// winit does NOT emit a PointerMoved event, so the egui pointer stays stale
-    /// (relative to the old window position). We recompute mouse_screen from this
-    /// to keep hover/drag stable across window moves.
-    pub last_mouse_screen: Option<egui::Pos2>,
     /// True while a background refresh thread is running.
     pub refresh_in_progress: bool,
     /// Receiver for the background thread's result (oneshot channel).
@@ -130,7 +95,7 @@ impl WidgetApp {
             error: None,
             last_refresh: Instant::now() - DEFAULT_REFRESH_INTERVAL, // force refresh on start
             was_hovered: false,
-            is_dragging: false,
+            drag: DragState::new(),
             show_settings: false,
             notification_sent: false,
             animated_percent: 0.0,
@@ -138,9 +103,6 @@ impl WidgetApp {
             color_key_applied: false,
             #[cfg(debug_assertions)]
             frame_count: 0,
-            drag_anchor: None,
-            press_pos: None,
-            last_mouse_screen: None,
             refresh_in_progress: false,
             pending_result: None,
             tooltip_expanded: false,
@@ -422,14 +384,8 @@ impl eframe::App for WidgetApp {
         #[cfg(windows)]
         if !self.color_key_applied {
             if let Some(gl) = frame.gl() {
-                unsafe {
-                    let alpha_bits = gl.get_framebuffer_attachment_parameter_i32(
-                        eframe::glow::FRAMEBUFFER,
-                        eframe::glow::COLOR_ATTACHMENT0,
-                        eframe::glow::FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE,
-                    );
-                    debug_log!("Framebuffer alpha bits: {}", alpha_bits);
-                }
+                let _alpha_bits = query_framebuffer_alpha(gl);
+                debug_log!("Framebuffer alpha bits: {}", _alpha_bits);
             }
             self.color_key_applied = true;
         }
@@ -437,7 +393,7 @@ impl eframe::App for WidgetApp {
         #[cfg(debug_assertions)]
         {
             self.frame_count += 1;
-            if self.frame_count % 60 == 0 {
+            if self.frame_count.is_multiple_of(60) {
                 debug_log!("update frame #{}", self.frame_count);
             }
         }
@@ -468,7 +424,7 @@ impl eframe::App for WidgetApp {
         // ── Settings viewport (separate popup window) ──
         #[cfg(windows)]
         {
-            if tray::tray::SETTINGS_REQUESTED.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            if tray::SETTINGS_REQUESTED.swap(false, std::sync::atomic::Ordering::SeqCst) {
                 debug_log!("Tray: settings requested");
                 if !self.show_settings {
                     self.show_settings = true;
@@ -681,8 +637,8 @@ impl eframe::App for WidgetApp {
                 }
             }
 
-            match tray::tray::check_events() {
-                Some(tray::tray::TrayCommand::Refresh) => {
+            match tray::check_events() {
+                Some(tray::TrayCommand::Refresh) => {
                     debug_log!("Tray: refresh requested");
                     self.start_refresh();
                 }
@@ -765,25 +721,9 @@ impl eframe::App for WidgetApp {
         // would leave `circle_hovered` true on the exact frame the mouse exits
         // → the tooltip wouldn't hide on fast mouse-leaves. We therefore drop
         // the carried screen pos as soon as `has_pointer` is false.
-        let mouse_screen = if !has_pointer {
-            self.last_mouse_screen = None;
-            None
-        } else {
-            match (cur_pos, pointer_pos) {
-                (Some(c), Some(pp)) if has_pointer_event => {
-                    let computed = c + pp.to_vec2();
-                    self.last_mouse_screen = Some(computed);
-                    Some(computed)
-                }
-                (Some(c), Some(pp)) => {
-                    // No real mouse event this frame: prefer the carried screen pos
-                    // (it stays correct even when the window jumped). Fall back to the
-                    // computed value only on the very first frame.
-                    Some(self.last_mouse_screen.unwrap_or_else(|| c + pp.to_vec2()))
-                }
-                _ => self.last_mouse_screen,
-            }
-        };
+        let mouse_screen = self.drag.compute_mouse_screen(
+            cur_pos, pointer_pos, has_pointer_event, has_pointer,
+        );
 
         // Hover detection in screen coordinates.
         let circle_screen_center =
@@ -799,8 +739,8 @@ impl eframe::App for WidgetApp {
         // opens. Instead we keep the tooltip shown during the press; the click
         // is detected below and is_dragging handles actual drag motion.
         let show_tooltip = circle_hovered
-            && !self.is_dragging
-            && self.usage.as_ref().map_or(false, |u| !u.is_empty());
+            && !self.drag.is_dragging
+            && self.usage.as_ref().is_some_and(|u| !u.is_empty());
 
         // ── Tooltip sizing (natural content width, so left/right flip is visible) ──
         const TIP_PAD: f32 = 8.0; // inner padding (text inset)
@@ -829,63 +769,22 @@ impl eframe::App for WidgetApp {
         };
 
         // ── Placement: pick the first corner (in priority order) that fits ──
-        // Priority: bottom-right → bottom-left → top-left → top-right.
-        // Only computed while the tooltip is actually shown (avoids a per-frame
-        // Win32 monitor query + log line when idle).
-        //
-        // tip_right semantics: true = tooltip's RIGHT edge aligns with the
-        // widget's RIGHT edge (tooltip extends LEFT of the widget); false =
-        // tooltip's LEFT edge aligns with the widget's LEFT edge (extends RIGHT).
-        let (tip_top, tip_right, work_area) = if show_tooltip {
-            let wa: Option<egui::Rect> = home.and_then(|h| {
-                #[cfg(windows)]
-                {
-                    crate::screen::work_area_for_point(h, ctx.pixels_per_point())
-                }
-                #[cfg(not(windows))]
-                {
-                    None
-                }
-            });
-            if let (Some(h), Some(area)) = (home, wa) {
-                let tip_x_ofs = |right: bool| if right { widget_size.x - tooltip_w } else { 0.0 };
-                let bottom_y = h.y + widget_size.y + TIP_GAP;
-                let top_y = h.y - TIP_GAP - tooltip_h;
-                let tip_rect = |right: bool, top: bool| {
-                    egui::Rect::from_min_size(
-                        egui::pos2(h.x + tip_x_ofs(right), if top { top_y } else { bottom_y }),
-                        egui::vec2(tooltip_w, tooltip_h),
-                    )
-                };
-                let fits = |r: egui::Rect| {
-                    r.min.x >= area.min.x - 1.0
-                        && r.min.y >= area.min.y - 1.0
-                        && r.max.x <= area.max.x + 1.0
-                        && r.max.y <= area.max.y + 1.0
-                };
-                let chosen = if fits(tip_rect(true, false)) {
-                    (false, true)
-                } else if fits(tip_rect(false, false)) {
-                    (false, false)
-                } else if fits(tip_rect(false, true)) {
-                    (true, false)
-                } else if fits(tip_rect(true, true)) {
-                    (true, true)
-                } else {
-                    // Nothing fits cleanly (widget itself is off-screen, or the
-                    // tooltip is wider than the work area). Pick the side with
-                    // more room so clamping below keeps the tooltip on-screen.
-                    let right_room = (area.max.x - (h.x + widget_size.x)).max(0.0);
-                    let left_room = (h.x - area.min.x).max(0.0);
-                    (false, left_room >= right_room)
-                };
-                (chosen.0, chosen.1, Some(area))
-            } else {
-                (false, true, None)
-            }
+        let placement = if show_tooltip {
+            compute_tooltip_placement(
+                home,
+                widget_size,
+                egui::vec2(tooltip_w, tooltip_h),
+                ctx.pixels_per_point(),
+                TIP_GAP,
+            )
         } else {
-            (false, true, None)
+            compute_tooltip_placement(
+                None, widget_size, egui::vec2(0.0, 0.0), ctx.pixels_per_point(), TIP_GAP,
+            )
         };
+        let tip_top = placement.top;
+        let tip_right = placement.right;
+        let work_area = placement.work_area;
 
         // ── Drag: track the widget's screen position directly ──
         // The widget follows the mouse via home = mouse - anchor, independent of
@@ -900,37 +799,17 @@ impl eframe::App for WidgetApp {
         // without moving) never sets is_dragging, so the tooltip stays shown and
         // the window doesn't resize mid-click (which used to break button_clicked
         // → settings wouldn't open).
-        if button_down && (circle_hovered || self.is_dragging) {
+        if button_down && (circle_hovered || self.drag.is_dragging) {
             if let (Some(ms), Some(h)) = (mouse_screen, home) {
-                // Capture press origin on the first frame the button is down.
-                if self.press_pos.is_none() {
-                    self.press_pos = Some(ms);
+                if self.drag.press_pos.is_none() {
+                    self.drag.press_pos = Some(ms);
                 }
-                // Check if the mouse has moved beyond the drag threshold.
-                let should_drag = self.is_dragging
-                    || self
-                        .press_pos
-                        .map_or(false, |p| p.distance(ms) > DRAG_THRESHOLD);
-                if should_drag {
-                    if !self.is_dragging {
-                        self.is_dragging = true;
-                        // anchor = offset from widget home to mouse at drag start.
-                        self.drag_anchor = Some(ms - h);
+                if self.drag.should_drag(ms, DRAG_THRESHOLD) {
+                    if !self.drag.is_dragging {
+                        self.drag.engage(ms, h);
                     }
-                    if let Some(anchor) = self.drag_anchor {
+                    if let Some(anchor) = self.drag.anchor {
                         let new_home = ms - anchor;
-                        // `home` is the widget's top-left corner and the widget
-                        // itself only occupies `widget_size` (in egui points /
-                        // logical px, the same space as the monitor rect from
-                        // screen.rs and as `home`). Clamp with widget_size, NOT
-                        // the actual OS window size: right after the tooltip was
-                        // shown the window is still expanded to cover the tooltip
-                        // (resize lag), so `outer_rect.size()` == widget_size +
-                        // tooltip_width and clamping with it would subtract the
-                        // tooltip width, leaving a gap between the widget and the
-                        // right screen edge. The tooltip is clamped independently
-                        // below (tip_screen_x), so it never needs to factor into
-                        // the widget's own clamp.
                         let clamped = clamp_home_to_work_area(
                             new_home,
                             widget_size,
@@ -982,7 +861,7 @@ impl eframe::App for WidgetApp {
         } else {
             widget_size
         };
-        let desired_pos = if self.is_dragging {
+        let desired_pos = if self.drag.is_dragging {
             home
         } else if show_tooltip {
             home.map(|h| {
@@ -1004,14 +883,14 @@ impl eframe::App for WidgetApp {
         }
         // Send OuterPosition when it changes (drag, top placement, restore).
         if let Some(dp) = desired_pos {
-            if self.tooltip_last_pos.map_or(true, |lp| lp.distance(dp) > 0.5) {
+            if self.tooltip_last_pos.is_none_or(|lp| lp.distance(dp) > 0.5) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(dp));
                 self.tooltip_last_pos = Some(dp);
             }
         }
 
         // ── tooltip_home lifecycle ──
-        if self.is_dragging {
+        if self.drag.is_dragging {
             // updated above; kept as the widget's current screen position.
         } else if show_tooltip {
             if self.tooltip_home.is_none() {
@@ -1065,7 +944,7 @@ impl eframe::App for WidgetApp {
 
         // Faint platform logo watermark on the circle background.
         if self.logo_texture.is_none() {
-            let bytes = include_bytes!("../assets/logo.png");
+            let bytes = include_bytes!("../../../assets/logo.png");
             if let Ok(img) = image::load_from_memory(bytes) {
                 let rgba = img.to_rgba8();
                 let size = [rgba.width() as usize, rgba.height() as usize];
@@ -1093,26 +972,15 @@ impl eframe::App for WidgetApp {
         }
 
         let percent = self.animated_percent;
-        if percent > 0.0 {
-            let color = percent_color(percent);
-            let start_angle = -std::f32::consts::FRAC_PI_2;
-            let sweep = (percent as f32 / 100.0) * 2.0 * std::f32::consts::PI;
-            let segments = 64;
-            self.arc_points_cache.clear();
-            let points: &[Pos2] = {
-                self.arc_points_cache.extend((0..=segments).map(|i| {
-                    let angle = start_angle + sweep * i as f32 / segments as f32;
-                    center + radius * egui::vec2(angle.cos(), angle.sin())
-                }));
-                &self.arc_points_cache
-            };
-            painter.add(Shape::Path(PathShape {
-                points: points.to_vec(),
-                closed: false,
-                fill: Color32::TRANSPARENT,
-                stroke: Stroke::new(cfg.stroke_width, color).into(),
-            }));
-        }
+        draw_widget_circle(
+            &painter,
+            center,
+            radius,
+            cfg.stroke_width,
+            percent,
+            percent_color(percent),
+            &mut self.arc_points_cache,
+        );
 
         if let Some(ref err) = self.error {
             let font_id = egui::FontId::proportional(cfg.error_font_size);
@@ -1166,21 +1034,18 @@ impl eframe::App for WidgetApp {
         // Clear press tracking when the button is released. If we were dragging,
         // persist the new position; for a pure click (never dragged) just clear
         // press_pos without a disk write.
-        if !button_down && (self.is_dragging || self.press_pos.is_some()) {
-            let was_dragging = self.is_dragging;
-            self.is_dragging = false;
-            self.drag_anchor = None;
-            self.press_pos = None;
+        if !button_down && (self.drag.is_dragging || self.drag.press_pos.is_some()) {
+            let was_dragging = self.drag.disengage();
             if was_dragging {
                 if let Some(h) = home {
                     let changed = self
                         .settings
                         .window_x
-                        .map_or(true, |x| (x - h.x).abs() > 0.5)
+                        .is_none_or(|x| (x - h.x).abs() > 0.5)
                         || self
                             .settings
                             .window_y
-                            .map_or(true, |y| (y - h.y).abs() > 0.5);
+                            .is_none_or(|y| (y - h.y).abs() > 0.5);
                     if changed {
                         self.settings.window_x = Some(h.x);
                         self.settings.window_y = Some(h.y);
@@ -1190,10 +1055,9 @@ impl eframe::App for WidgetApp {
             }
         }
 
-        if hovered && !self.was_hovered {
-            if self.last_refresh.elapsed() >= HOVER_COOLDOWN {
-                self.start_refresh();
-            }
+        if hovered && !self.was_hovered
+            && self.last_refresh.elapsed() >= HOVER_COOLDOWN {
+            self.start_refresh();
         }
         self.was_hovered = hovered;
     }
@@ -1265,89 +1129,15 @@ impl WidgetApp {
                         };
 
                         if *tab == 0 {
-                            // ── 通用 ──
-
-                            // ── 刷新 ──
-                            section(ui, "🔄 刷新", &mut |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("刷新间隔")
-                                            .color(text_muted)
-                                            .font(egui::FontId::proportional(12.0)),
-                                    );
-                                    let mut secs = settings.refresh_interval_secs;
-                                    if secs < 30 {
-                                        secs = 30;
-                                    }
-                                    if ui
-                                        .add(
-                                            egui::DragValue::new(&mut secs)
-                                                .range(30..=3600)
-                                                .suffix(" 秒"),
-                                        )
-                                        .changed()
-                                    {
-                                        settings.refresh_interval_secs = secs;
-                                    }
-                                });
-                            });
-
-                            // ── 通知 ──
-                            section(ui, "🔔 通知", &mut |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("用量阈值")
-                                            .color(text_muted)
-                                            .font(egui::FontId::proportional(12.0)),
-                                    );
-                                    let mut threshold = settings.notification_threshold;
-                                    if ui
-                                        .add(
-                                            egui::DragValue::new(&mut threshold)
-                                                .range(0.0..=100.0)
-                                                .speed(1.0)
-                                                .suffix(" %"),
-                                        )
-                                        .changed()
-                                    {
-                                        settings.notification_threshold = threshold;
-                                    }
-                                });
-                                if settings.notification_threshold <= 0.0 {
-                                    ui.label(
-                                        egui::RichText::new("设为 0 可禁用通知")
-                                            .color(text_muted)
-                                            .font(egui::FontId::proportional(11.0)),
-                                    );
-                                }
-                            });
-
-                            // ── 外观 ──
-                            section(ui, "🎨 外观", &mut |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("主题")
-                                            .color(text_muted)
-                                            .font(egui::FontId::proportional(12.0)),
-                                    );
-                                    let is_dark = matches!(settings.theme, Theme::Dark);
-                                    if ui.selectable_label(is_dark, "🌙 暗色").clicked() {
-                                        settings.theme = Theme::Dark;
-                                    }
-                                    if ui.selectable_label(!is_dark, "☀️ 亮色").clicked() {
-                                        settings.theme = Theme::Light;
-                                    }
-                                });
-                            });
-
-                            // ── 其他 ──
-                            section(ui, "⚙ 其他", &mut |ui| {
-                                if ui
-                                    .checkbox(&mut settings.auto_start, "开机自启")
-                                    .changed()
-                                {
-                                }
-                            });
+                            render_common_general_tab(
+                                ui,
+                                &mut settings.refresh_interval_secs,
+                                &mut settings.notification_threshold,
+                                &mut settings.theme,
+                                &mut settings.auto_start,
+                                card_bg,
+                                text_muted,
+                            );
                         } else {
                             // ── Cookie ──
 
@@ -1408,12 +1198,11 @@ impl WidgetApp {
                                     .fill(accent)
                                     .corner_radius(egui::CornerRadius::same(6))
                                     .min_size(egui::vec2(160.0, 36.0));
-                                    if ui.add(btn).clicked() {
-                                        if webview_receiver.borrow().is_none() {
-                                            debug_log!("Settings: open console (WebView2 login) clicked");
-                                            let rx = crate::webview_login::try_extract_credentials();
-                                            webview_receiver.borrow_mut().replace(rx);
-                                        }
+                                    if ui.add(btn).clicked()
+                                        && webview_receiver.borrow().is_none() {
+                                        debug_log!("Settings: open console (WebView2 login) clicked");
+                                        let rx = crate::webview_login::try_extract_credentials();
+                                        webview_receiver.borrow_mut().replace(rx);
                                     }
                                 },
                             );

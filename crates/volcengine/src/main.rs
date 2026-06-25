@@ -8,15 +8,11 @@ mod widget;
 
 use eframe::egui;
 
-// Import + re-export shared library items for use by sub-modules (widget.rs etc.).
-pub use coding_plan_widget::{
-    debug_log, screen, theme,
-    DEFAULT_REFRESH_INTERVAL, HOVER_COOLDOWN, RESET_REFRESH_COOLDOWN,
-    show_usage_notification, apply_auto_start, setup_cjk_font,
-    log,
+use coding_plan_widget_shared::{
+    debug_log, theme,
+    apply_auto_start, setup_cjk_font,
+    log, tray,
 };
-#[cfg(windows)]
-pub use coding_plan_widget::tray;
 
 use crate::settings::Settings;
 use crate::widget::WidgetApp;
@@ -27,7 +23,7 @@ fn main() -> eframe::Result {
     log::init_logger();
     debug_log!("=== Coding Plan Widget starting ===");
     #[cfg(windows)]
-    tray::tray::init_tray("Coding Plan Widget", "Coding Plan Widget");
+    tray::init_tray("Coding Plan Widget", "Coding Plan Widget");
 
     let settings = Settings::load();
     debug_log!("Settings loaded: configured={}", settings.is_configured());

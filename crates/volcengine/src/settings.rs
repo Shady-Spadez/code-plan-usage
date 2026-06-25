@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::debug_log;
-use crate::theme::Theme;
+use coding_plan_widget_shared::debug_log;
+use coding_plan_widget_shared::theme::Theme;
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
@@ -134,5 +134,5 @@ impl Settings {
 }
 
 pub fn settings_path() -> PathBuf {
-    crate::log::exe_dir().join("coding_plan_settings.json")
+    coding_plan_widget_shared::log::exe_dir().join("coding_plan_settings.json")
 }

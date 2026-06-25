@@ -720,6 +720,23 @@ name = "coding-plan-widget"
 version = "0.2.0"
 dependencies = [
  "chrono",
+ "coding-plan-widget-shared",
+ "eframe",
+ "egui",
+ "image",
+ "serde",
+ "serde_json",
+ "ureq",
+ "webview2-com",
+ "windows",
+]
+
+[[package]]
+name = "coding-plan-widget-root"
+version = "0.2.0"
+dependencies = [
+ "chrono",
+ "coding-plan-widget-shared",
  "eframe",
  "egui",
  "image",
@@ -728,6 +745,20 @@ dependencies = [
  "tray-icon",
  "ureq",
  "webview2-com",
+ "windows",
+]
+
+[[package]]
+name = "coding-plan-widget-shared"
+version = "0.2.0"
+dependencies = [
+ "chrono",
+ "eframe",
+ "egui",
+ "image",
+ "serde",
+ "serde_json",
+ "tray-icon",
  "windows",
 ]
 

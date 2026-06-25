@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Sender};
 
-use coding_plan_widget::debug_log;
+use coding_plan_widget_shared::debug_log;
 
 const TARGET_URL: &str = "https://dash.coconut.is/account/settings/";
 

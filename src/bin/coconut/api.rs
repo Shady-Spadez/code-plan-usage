@@ -2,7 +2,7 @@ use chrono::{NaiveDate, TimeZone, Utc};
 use serde::Deserialize;
 use std::time::Duration;
 
-use coding_plan_widget::debug_log;
+use coding_plan_widget_shared::debug_log;
 
 // ── API URL ──────────────────────────────────────────────────────────────────
 

@@ -1,31 +1,16 @@
-[workspace]
-resolver = "2"
-members = [
-    ".",
-    "crates/shared",
-    "crates/volcengine",
-]
-
 [package]
-name = "coding-plan-widget-root"
+name = "coding-plan-widget-shared"
 version = "0.2.0"
 edition = "2021"
 
-[[bin]]
-name = "coding-plan-widget-coconut"
-path = "src/bin/coconut.rs"
-
 [dependencies]
-coding-plan-widget-shared = { path = "crates/shared" }
 eframe = "0.31"
 egui = "0.31"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
-ureq = { version = "2", features = ["json"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["implement", "Win32_Security_Cryptography", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_Registry", "Win32_System_Com", "Win32_System_LibraryLoader"] }
-webview2-com = "0.34"
 tray-icon = "0.24"

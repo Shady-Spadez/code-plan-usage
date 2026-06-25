@@ -1,0 +1,65 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "skills": {
+    "paths": [
+      ".agents/skills"
+    ]
+  },
+  "model": "ds/deepseek-v4-pro",
+  "agent": {
+    "build": {
+      "permission": {
+        "external_directory": "allow"
+      },
+      "model": "ds/deepseek-v4-pro"
+    },
+    "plan": {
+      "permission": {
+        "external_directory": "allow"
+      },
+      "model": "ds/deepseek-v4-pro"
+    },
+    "general": {
+      "permission": {
+        "external_directory": "allow"
+      },
+      "model": "ds/deepseek-v4-pro"
+    },
+    "explore": {
+      "permission": {
+        "external_directory": "allow"
+      },
+      "model": "ds/deepseek-v4-flash"
+    },
+    "code-reviewer": {
+      "permission": {
+        "edit": "deny",
+        "bash": "allow",
+        "external_directory": "allow"
+      },
+      "model": "ds/deepseek-v4-pro"
+    },
+    "doc-sync": {
+      "permission": {
+        "edit": "deny",
+        "bash": "deny",
+        "external_directory": "allow"
+      }
+    },
+    "verifier": {
+      "permission": {
+        "bash": "allow",
+        "external_directory": "allow"
+      },
+      "model": "ds/deepseek-v4-pro"
+    },
+    "fixer": {
+      "permission": {
+        "edit": "allow",
+        "bash": "allow",
+        "external_directory": "allow"
+      },
+      "model": "ds/deepseek-v4-pro"
+    }
+  }
+}

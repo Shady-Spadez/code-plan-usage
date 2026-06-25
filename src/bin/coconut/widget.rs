@@ -1,21 +1,24 @@
 use eframe::egui;
-use egui::epaint::PathShape;
-use egui::{Color32, Pos2, Shape, Stroke};
+use egui::{Color32, Stroke};
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 use eframe::glow::HasContext as _;
 
-use coding_plan_widget::{
+use coding_plan_widget_shared::{
     debug_log,
-    screen,
     DEFAULT_REFRESH_INTERVAL, HOVER_COOLDOWN, RESET_REFRESH_COOLDOWN,
     show_usage_notification, apply_auto_start,
 };
-use coding_plan_widget::theme::{percent_color, widget_config, widget_window_size, Theme};
+use coding_plan_widget_shared::theme::{percent_color, widget_config, widget_window_size};
+use coding_plan_widget_shared::widgets::{
+    DragState, clamp_home_to_work_area, draw_widget_circle,
+    compute_tooltip_placement,
+    query_framebuffer_alpha, render_common_general_tab,
+};
 
 #[cfg(windows)]
-use coding_plan_widget::tray;
+use coding_plan_widget_shared::tray;
 
 #[cfg(windows)]
 use crate::webview_login;
@@ -26,18 +29,6 @@ use crate::settings::CoconutSettings;
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const DRAG_THRESHOLD: f32 = 4.0;
-
-/// Clamp a widget home position so the whole widget stays on its monitor.
-fn clamp_home_to_work_area(home: egui::Pos2, ws: egui::Vec2, ppp: f32) -> egui::Pos2 {
-    match screen::screen_info_for_point(home, ppp) {
-        Some(info) => {
-            let x = home.x.clamp(info.monitor.min.x, (info.monitor.max.x - ws.x).max(info.monitor.min.x));
-            let y = home.y.clamp(info.work_area.min.y, (info.work_area.max.y - ws.y).max(info.work_area.min.y));
-            egui::pos2(x, y)
-        }
-        None => home,
-    }
-}
 
 // ── Tooltip row ──────────────────────────────────────────────────────────────
 
@@ -65,15 +56,12 @@ pub struct CoconutApp {
     pub error: Option<String>,
     pub last_refresh: Instant,
     pub was_hovered: bool,
-    pub is_dragging: bool,
+    pub drag: DragState,
     pub show_settings: bool,
     pub notification_sent: bool,
     pub animated_percent: f64,
     #[cfg(windows)]
     pub color_key_applied: bool,
-    pub drag_anchor: Option<egui::Vec2>,
-    pub press_pos: Option<egui::Pos2>,
-    pub last_mouse_screen: Option<egui::Pos2>,
     pub refresh_in_progress: bool,
     pub pending_result: Option<std::sync::mpsc::Receiver<Result<DailyActivity, String>>>,
     pub tooltip_expanded: bool,
@@ -101,15 +89,12 @@ impl CoconutApp {
             error: None,
             last_refresh: Instant::now() - DEFAULT_REFRESH_INTERVAL,
             was_hovered: false,
-            is_dragging: false,
+            drag: DragState::new(),
             show_settings: false,
             notification_sent: false,
             animated_percent: 0.0,
             #[cfg(windows)]
             color_key_applied: false,
-            drag_anchor: None,
-            press_pos: None,
-            last_mouse_screen: None,
             refresh_in_progress: false,
             pending_result: None,
             tooltip_expanded: false,
@@ -387,14 +372,8 @@ impl eframe::App for CoconutApp {
         #[cfg(windows)]
         if !self.color_key_applied {
             if let Some(gl) = frame.gl() {
-                unsafe {
-                    let alpha_bits = gl.get_framebuffer_attachment_parameter_i32(
-                        eframe::glow::FRAMEBUFFER,
-                        eframe::glow::COLOR_ATTACHMENT0,
-                        eframe::glow::FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE,
-                    );
-                    debug_log!("Coconut framebuffer alpha bits: {}", alpha_bits);
-                }
+                let _alpha_bits = query_framebuffer_alpha(gl);
+                debug_log!("Coconut framebuffer alpha bits: {}", _alpha_bits);
             }
             self.color_key_applied = true;
         }
@@ -425,10 +404,9 @@ impl eframe::App for CoconutApp {
         // ── Settings viewport ──
         #[cfg(windows)]
         {
-            if tray::tray::SETTINGS_REQUESTED.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                if !self.show_settings {
-                    self.show_settings = true;
-                }
+            if tray::SETTINGS_REQUESTED.swap(false, std::sync::atomic::Ordering::SeqCst)
+                && !self.show_settings {
+                self.show_settings = true;
             }
 
             if self.show_settings {
@@ -596,8 +574,8 @@ impl eframe::App for CoconutApp {
                 }
             }
 
-            match tray::tray::check_events() {
-                Some(tray::tray::TrayCommand::Refresh) => {
+            match tray::check_events() {
+                Some(tray::TrayCommand::Refresh) => {
                     debug_log!("Coconut tray: refresh requested");
                     self.start_refresh();
                 }
@@ -652,22 +630,9 @@ impl eframe::App for CoconutApp {
         let cur_pos = viewport_rect.map(|r| r.min);
         let mut home = self.tooltip_home.or(cur_pos);
 
-        let mouse_screen = if !has_pointer {
-            self.last_mouse_screen = None;
-            None
-        } else {
-            match (cur_pos, pointer_pos) {
-                (Some(c), Some(pp)) if has_pointer_event => {
-                    let computed = c + pp.to_vec2();
-                    self.last_mouse_screen = Some(computed);
-                    Some(computed)
-                }
-                (Some(c), Some(pp)) => {
-                    Some(self.last_mouse_screen.unwrap_or_else(|| c + pp.to_vec2()))
-                }
-                _ => self.last_mouse_screen,
-            }
-        };
+        let mouse_screen = self.drag.compute_mouse_screen(
+            cur_pos, pointer_pos, has_pointer_event, has_pointer,
+        );
 
         let circle_screen_center = home.map(|h| egui::pos2(h.x + circle_x, h.y + widget_size.y / 2.0));
         let circle_hovered = match (mouse_screen, circle_screen_center) {
@@ -675,7 +640,7 @@ impl eframe::App for CoconutApp {
             _ => false,
         };
 
-        let show_tooltip = circle_hovered && !self.is_dragging && self.activity.is_some();
+        let show_tooltip = circle_hovered && !self.drag.is_dragging && self.activity.is_some();
 
         // ── Tooltip sizing ──
         const TIP_PAD_X: f32 = 10.0;
@@ -712,47 +677,32 @@ impl eframe::App for CoconutApp {
         };
 
         // ── Placement ──
-        let (tip_top, tip_right, work_area) = if show_tooltip {
-            let wa = home.and_then(|h| screen::work_area_for_point(h, ctx.pixels_per_point()));
-            if let (Some(h), Some(area)) = (home, wa) {
-                let tip_x_ofs = |right: bool| if right { widget_size.x - tooltip_w } else { 0.0 };
-                let bottom_y = h.y + widget_size.y + TIP_GAP;
-                let top_y = h.y - TIP_GAP - tooltip_h;
-                let tip_rect = |right: bool, top: bool| {
-                    egui::Rect::from_min_size(
-                        egui::pos2(h.x + tip_x_ofs(right), if top { top_y } else { bottom_y }),
-                        egui::vec2(tooltip_w, tooltip_h),
-                    )
-                };
-                let fits = |r: egui::Rect| {
-                    r.min.x >= area.min.x - 1.0 && r.min.y >= area.min.y - 1.0
-                        && r.max.x <= area.max.x + 1.0 && r.max.y <= area.max.y + 1.0
-                };
-                let chosen = if fits(tip_rect(true, false)) { (false, true) }
-                    else if fits(tip_rect(false, false)) { (false, false) }
-                    else if fits(tip_rect(false, true)) { (true, false) }
-                    else if fits(tip_rect(true, true)) { (true, true) }
-                    else {
-                        let right_room = (area.max.x - (h.x + widget_size.x)).max(0.0);
-                        let left_room = (h.x - area.min.x).max(0.0);
-                        (false, left_room >= right_room)
-                    };
-                (chosen.0, chosen.1, Some(area))
-            } else { (false, true, None) }
-        } else { (false, true, None) };
+        let placement = if show_tooltip {
+            compute_tooltip_placement(
+                home,
+                widget_size,
+                egui::vec2(tooltip_w, tooltip_h),
+                ctx.pixels_per_point(),
+                TIP_GAP,
+            )
+        } else {
+            compute_tooltip_placement(
+                None, widget_size, egui::vec2(0.0, 0.0), ctx.pixels_per_point(), TIP_GAP,
+            )
+        };
+        let tip_top = placement.top;
+        let tip_right = placement.right;
+        let work_area = placement.work_area;
 
         // ── Drag ──
-        if button_down && (circle_hovered || self.is_dragging) {
+        if button_down && (circle_hovered || self.drag.is_dragging) {
             if let (Some(ms), Some(h)) = (mouse_screen, home) {
-                if self.press_pos.is_none() { self.press_pos = Some(ms); }
-                let should_drag = self.is_dragging
-                    || self.press_pos.map_or(false, |p| p.distance(ms) > DRAG_THRESHOLD);
-                if should_drag {
-                    if !self.is_dragging {
-                        self.is_dragging = true;
-                        self.drag_anchor = Some(ms - h);
+                if self.drag.press_pos.is_none() { self.drag.press_pos = Some(ms); }
+                if self.drag.should_drag(ms, DRAG_THRESHOLD) {
+                    if !self.drag.is_dragging {
+                        self.drag.engage(ms, h);
                     }
-                    if let Some(anchor) = self.drag_anchor {
+                    if let Some(anchor) = self.drag.anchor {
                         let clamped = clamp_home_to_work_area(ms - anchor, widget_size, ctx.pixels_per_point());
                         home = Some(clamped);
                         self.tooltip_home = Some(clamped);
@@ -779,7 +729,7 @@ impl eframe::App for CoconutApp {
         };
         let win_w = (win_right - win_left).max(0.0);
         let desired_size = if show_tooltip { egui::vec2(win_w, full_h) } else { widget_size };
-        let desired_pos = if self.is_dragging {
+        let desired_pos = if self.drag.is_dragging {
             home
         } else if show_tooltip {
             home.map(|h| {
@@ -793,13 +743,13 @@ impl eframe::App for CoconutApp {
             self.tooltip_last_size = Some(desired_size);
         }
         if let Some(dp) = desired_pos {
-            if self.tooltip_last_pos.map_or(true, |lp| lp.distance(dp) > 0.5) {
+            if self.tooltip_last_pos.is_none_or(|lp| lp.distance(dp) > 0.5) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(dp));
                 self.tooltip_last_pos = Some(dp);
             }
         }
 
-        if self.is_dragging {
+        if self.drag.is_dragging {
         } else if show_tooltip {
             if self.tooltip_home.is_none() { self.tooltip_home = cur_pos; }
         } else if let (Some(c), Some(h)) = (cur_pos, self.tooltip_home) {
@@ -855,26 +805,15 @@ impl eframe::App for CoconutApp {
 
         // Arc
         let percent = self.animated_percent;
-        if percent > 0.0 {
-            let color = percent_color(percent);
-            let start_angle = -std::f32::consts::FRAC_PI_2;
-            let sweep = (percent as f32 / 100.0) * 2.0 * std::f32::consts::PI;
-            let segments = 64;
-            self.arc_points_cache.clear();
-            let points: &[Pos2] = {
-                self.arc_points_cache.extend((0..=segments).map(|i| {
-                    let angle = start_angle + sweep * i as f32 / segments as f32;
-                    center + radius * egui::vec2(angle.cos(), angle.sin())
-                }));
-                &self.arc_points_cache
-            };
-            painter.add(Shape::Path(PathShape {
-                points: points.to_vec(),
-                closed: false,
-                fill: Color32::TRANSPARENT,
-                stroke: Stroke::new(cfg.stroke_width, color).into(),
-            }));
-        }
+        draw_widget_circle(
+            &painter,
+            center,
+            radius,
+            cfg.stroke_width,
+            percent,
+            percent_color(percent),
+            &mut self.arc_points_cache,
+        );
 
         // Error text
         if let Some(ref err) = self.error {
@@ -936,15 +875,12 @@ impl eframe::App for CoconutApp {
             self.show_settings = true;
         }
 
-        if !button_down && (self.is_dragging || self.press_pos.is_some()) {
-            let was_dragging = self.is_dragging;
-            self.is_dragging = false;
-            self.drag_anchor = None;
-            self.press_pos = None;
+        if !button_down && (self.drag.is_dragging || self.drag.press_pos.is_some()) {
+            let was_dragging = self.drag.disengage();
             if was_dragging {
                 if let Some(h) = home {
-                    let changed = self.settings.window_x.map_or(true, |x| (x - h.x).abs() > 0.5)
-                        || self.settings.window_y.map_or(true, |y| (y - h.y).abs() > 0.5);
+                    let changed = self.settings.window_x.is_none_or(|x| (x - h.x).abs() > 0.5)
+                        || self.settings.window_y.is_none_or(|y| (y - h.y).abs() > 0.5);
                     if changed {
                         self.settings.window_x = Some(h.x);
                         self.settings.window_y = Some(h.y);
@@ -954,10 +890,9 @@ impl eframe::App for CoconutApp {
             }
         }
 
-        if circle_hovered && !self.was_hovered {
-            if self.last_refresh.elapsed() >= HOVER_COOLDOWN {
-                self.start_refresh();
-            }
+        if circle_hovered && !self.was_hovered
+            && self.last_refresh.elapsed() >= HOVER_COOLDOWN {
+            self.start_refresh();
         }
         self.was_hovered = circle_hovered;
     }
@@ -1008,43 +943,15 @@ impl CoconutApp {
                 };
 
                 if *tab == 0 {
-                    section(ui, "刷新", &mut |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("刷新间隔").color(text_muted)
-                                .font(egui::FontId::proportional(12.0)));
-                            let mut secs = settings.refresh_interval_secs;
-                            if secs < 30 { secs = 30; }
-                            if ui.add(egui::DragValue::new(&mut secs).range(30..=3600).suffix(" 秒")).changed() {
-                                settings.refresh_interval_secs = secs;
-                            }
-                        });
-                    });
-                    section(ui, "通知", &mut |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("用量阈值").color(text_muted)
-                                .font(egui::FontId::proportional(12.0)));
-                            let mut threshold = settings.notification_threshold;
-                            if ui.add(egui::DragValue::new(&mut threshold).range(0.0..=100.0).speed(1.0).suffix(" %")).changed() {
-                                settings.notification_threshold = threshold;
-                            }
-                        });
-                        if settings.notification_threshold <= 0.0 {
-                            ui.label(egui::RichText::new("设为 0 可禁用通知").color(text_muted)
-                                .font(egui::FontId::proportional(11.0)));
-                        }
-                    });
-                    section(ui, "外观", &mut |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("主题").color(text_muted)
-                                .font(egui::FontId::proportional(12.0)));
-                            let is_dark = matches!(settings.theme, Theme::Dark);
-                            if ui.selectable_label(is_dark, "暗色").clicked() { settings.theme = Theme::Dark; }
-                            if ui.selectable_label(!is_dark, "亮色").clicked() { settings.theme = Theme::Light; }
-                        });
-                    });
-                    section(ui, "其他", &mut |ui| {
-                        if ui.checkbox(&mut settings.auto_start, "开机自启").changed() {}
-                    });
+                    render_common_general_tab(
+                        ui,
+                        &mut settings.refresh_interval_secs,
+                        &mut settings.notification_threshold,
+                        &mut settings.theme,
+                        &mut settings.auto_start,
+                        card_bg,
+                        text_muted,
+                    );
                 } else {
                     section(ui, "Authorization Token", &mut |ui| {
                         ui.label(egui::RichText::new("JWT Bearer Token").color(text_muted)
@@ -1060,14 +967,13 @@ impl CoconutApp {
                         let btn = egui::Button::new(egui::RichText::new("打开控制台").color(Color32::WHITE)
                             .font(egui::FontId::proportional(14.0)))
                             .fill(accent).corner_radius(egui::CornerRadius::same(6)).min_size(egui::vec2(160.0, 36.0));
-                        if ui.add(btn).clicked() {
-                            if webview_receiver.borrow().is_none() {
-                                debug_log!("Coconut settings: open WebView2 login clicked");
-                                #[cfg(windows)]
-                                {
-                                    let rx = webview_login::try_extract_token();
-                                    webview_receiver.borrow_mut().replace(rx);
-                                }
+                        if ui.add(btn).clicked()
+                            && webview_receiver.borrow().is_none() {
+                            debug_log!("Coconut settings: open WebView2 login clicked");
+                            #[cfg(windows)]
+                            {
+                                let rx = webview_login::try_extract_token();
+                                webview_receiver.borrow_mut().replace(rx);
                             }
                         }
                     });

@@ -2,7 +2,7 @@ use serde::Deserialize;
 use chrono::Utc;
 use std::time::Duration;
 
-use crate::debug_log;
+use coding_plan_widget_shared::debug_log;
 
 // ── API URL helpers ───────────────────────────────────────────────────────────
 

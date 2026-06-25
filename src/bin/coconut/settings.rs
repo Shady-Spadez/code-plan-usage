@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use coding_plan_widget::{debug_log, log};
-use coding_plan_widget::theme::Theme;
+use coding_plan_widget_shared::{debug_log, log};
+use coding_plan_widget_shared::theme::Theme;
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 

@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Sender};
 
-use crate::debug_log;
+use coding_plan_widget_shared::debug_log;
 
 pub struct BrowserCredentials {
     pub cookie: String,
