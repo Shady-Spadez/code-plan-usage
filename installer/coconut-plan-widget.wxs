@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+    Id="*"
+    Name="Coconut Plan Widget"
+    Language="1033"
+    Version="0.1.0"
+    Manufacturer="Coconut"
+    UpgradeCode="2218201e-14e3-47ee-b2a6-ee10659a3529">
+
+    <Package
+      InstallerVersion="200"
+      Compressed="yes"
+      InstallScope="perUser"
+      Platform="x64" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsFolder" Name="Programs">
+          <Directory Id="INSTALLFOLDER" Name="CoconutPlanWidget">
+            <Component Id="MainExecutable" Guid="*">
+              <File
+                Id="ExeFile"
+                Name="coding-plan-widget-coconut.exe"
+                Source="..\target\release\coding-plan-widget-coconut.exe"
+                KeyPath="yes" />
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+
+      <!-- Start Menu shortcut -->
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="StartMenuFolder" Name="Coconut Plan Widget">
+          <Component Id="StartMenuShortcut" Guid="*">
+            <Shortcut
+              Id="StartMenuLink"
+              Name="Coconut Plan Widget"
+              Target="[INSTALLFOLDER]coding-plan-widget-coconut.exe"
+              WorkingDirectory="INSTALLFOLDER" />
+            <RemoveFolder Id="RemoveStartMenuFolder" On="uninstall" />
+            <RegistryValue
+              Root="HKCU"
+              Key="Software\CoconutPlanWidget"
+              Name="installed"
+              Type="integer"
+              Value="1"
+              KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+
+      <!-- Desktop shortcut (optional) -->
+      <Directory Id="DesktopFolder">
+        <Component Id="DesktopShortcut" Guid="*">
+          <Shortcut
+            Id="DesktopLink"
+            Name="Coconut Plan Widget"
+            Target="[INSTALLFOLDER]coding-plan-widget-coconut.exe"
+            WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="RemoveDesktopFolder" On="uninstall" />
+          <RegistryValue
+            Root="HKCU"
+            Key="Software\CoconutPlanWidget"
+            Name="desktopInstalled"
+            Type="integer"
+            Value="1"
+            KeyPath="yes" />
+        </Component>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Complete" Title="Coconut Plan Widget" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+
+  </Product>
+</Wix>
