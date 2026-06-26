@@ -79,13 +79,33 @@ pub struct ActivityMetadata {
     pub total_cache_creation_input_tokens: u64,
 }
 
+/// Structured error for Coconut API calls.
+#[derive(Debug)]
+pub enum CoconutApiError {
+    Network(String),
+    HttpStatus(u16),
+    Deserialization(String),
+    ApiStatus(String),
+}
+
+impl std::fmt::Display for CoconutApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Network(msg) => write!(f, "请求失败: {}", msg),
+            Self::HttpStatus(code) => write!(f, "HTTP {}", code),
+            Self::Deserialization(msg) => write!(f, "解析失败: {}", msg),
+            Self::ApiStatus(status) => write!(f, "状态: {}", status),
+        }
+    }
+}
+
 // ── API Fetch ────────────────────────────────────────────────────────────────
 
 /// Fetch usage data from the Coconut API.
 /// Returns the DailyActivity which includes metadata for monthly totals.
-pub fn fetch_usage(auth_token: &str) -> Result<DailyActivity, String> {
+pub fn fetch_usage(auth_token: &str) -> Result<DailyActivity, CoconutApiError> {
     const MAX_RETRIES: u32 = 3;
-    let mut last_error = String::new();
+    let mut last_error: Option<CoconutApiError> = None;
 
     let auth_header = if auth_token.starts_with("Bearer ") {
         auth_token.to_string()
@@ -118,29 +138,29 @@ pub fn fetch_usage(auth_token: &str) -> Result<DailyActivity, String> {
         {
             Ok(resp) => resp,
             Err(e) => {
-                let err_msg = format!("请求失败: {}", e);
-                debug_log!("fetch_usage attempt {} failed: {}", attempt, err_msg);
-                last_error = err_msg;
+                let err = CoconutApiError::Network(e.to_string());
+                debug_log!("fetch_usage attempt {} failed: {}", attempt, err);
+                last_error = Some(err);
                 continue;
             }
         };
 
         if response.status() != 200 {
-            return Err(format!("HTTP {}", response.status()));
+            return Err(CoconutApiError::HttpStatus(response.status()));
         }
 
         let api_response: ApiResponse = response
             .into_json()
-            .map_err(|e| format!("解析失败: {}", e))?;
+            .map_err(|e| CoconutApiError::Deserialization(e.to_string()))?;
 
         if api_response.status != "ok" {
-            return Err(format!("状态: {}", api_response.status));
+            return Err(CoconutApiError::ApiStatus(api_response.status));
         }
 
         return Ok(api_response.result.daily_activity);
     }
 
-    Err(last_error)
+    Err(last_error.unwrap_or_else(|| CoconutApiError::Network("unknown".into())))
 }
 
 /// Returns true when `end_date` (format "YYYY-MM-DD") represents a date whose
@@ -215,5 +235,37 @@ mod tests {
     #[test]
     fn test_is_end_date_passed_empty() {
         assert!(!is_end_date_passed(""));
+    }
+
+    #[test]
+    fn test_coconut_api_error_display_network() {
+        let err = CoconutApiError::Network("connection refused".into());
+        assert_eq!(err.to_string(), "请求失败: connection refused");
+    }
+
+    #[test]
+    fn test_coconut_api_error_display_http_status() {
+        let err = CoconutApiError::HttpStatus(401);
+        assert_eq!(err.to_string(), "HTTP 401");
+    }
+
+    #[test]
+    fn test_coconut_api_error_display_deserialization() {
+        let err = CoconutApiError::Deserialization("missing field".into());
+        assert_eq!(err.to_string(), "解析失败: missing field");
+    }
+
+    #[test]
+    fn test_coconut_api_error_display_api_status() {
+        let err = CoconutApiError::ApiStatus("error".into());
+        assert_eq!(err.to_string(), "状态: error");
+    }
+
+    #[test]
+    fn test_coconut_api_error_debug() {
+        let err = CoconutApiError::HttpStatus(500);
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("HttpStatus"));
+        assert!(debug.contains("500"));
     }
 }

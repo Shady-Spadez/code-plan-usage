@@ -23,7 +23,7 @@ use coding_plan_widget_shared::tray;
 #[cfg(windows)]
 use crate::webview_login;
 
-use crate::api::{fetch_usage, DailyActivity};
+use crate::api::{fetch_usage, CoconutApiError, DailyActivity};
 use crate::settings::CoconutSettings;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -63,7 +63,7 @@ pub struct CoconutApp {
     #[cfg(windows)]
     pub color_key_applied: bool,
     pub refresh_in_progress: bool,
-    pub pending_result: Option<std::sync::mpsc::Receiver<Result<DailyActivity, String>>>,
+    pub pending_result: Option<std::sync::mpsc::Receiver<Result<DailyActivity, CoconutApiError>>>,
     pub tooltip_expanded: bool,
     pub tooltip_home: Option<egui::Pos2>,
     pub tooltip_last_pos: Option<egui::Pos2>,
@@ -175,7 +175,7 @@ impl CoconutApp {
         false
     }
 
-    fn apply_refresh_result(&mut self, result: Result<DailyActivity, String>) {
+    fn apply_refresh_result(&mut self, result: Result<DailyActivity, CoconutApiError>) {
         match result {
             Ok(activity) => {
                 debug_log!("Coconut API SUCCESS: spend=${:.4}, tokens={}",
@@ -206,7 +206,7 @@ impl CoconutApp {
                     if is_likely_auth_error(&e) {
                         self.error = Some("Token 过期，请重新登录".to_string());
                     } else {
-                        self.error = Some(e);
+                        self.error = Some(e.to_string());
                     }
                 } else if is_likely_auth_error(&e)
                     && !self.silent_reauth_in_progress
@@ -215,7 +215,7 @@ impl CoconutApp {
                     self.error = Some("正在重新获取 Token...".to_string());
                     self.start_silent_reauth();
                 } else {
-                    self.error = Some(e);
+                    self.error = Some(e.to_string());
                 }
             }
         }
@@ -339,8 +339,8 @@ impl CoconutApp {
     fn check_silent_reauth_result(&mut self) -> bool { false }
 }
 
-fn is_likely_auth_error(err: &str) -> bool {
-    err.starts_with("HTTP 401") || err.starts_with("HTTP 403") || err.starts_with("解析失败")
+fn is_likely_auth_error(err: &CoconutApiError) -> bool {
+    matches!(err, CoconutApiError::HttpStatus(401 | 403))
 }
 
 fn format_number(n: u64) -> String {
