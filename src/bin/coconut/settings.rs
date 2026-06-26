@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use coding_plan_widget_shared::{debug_log, log};
 use coding_plan_widget_shared::theme::Theme;
@@ -56,7 +56,14 @@ impl CoconutSettings {
     }
 
     pub fn load() -> Self {
-        let settings = Self::load_from_file().unwrap_or_default();
+        let path = settings_path();
+        let settings = if !path.exists() {
+            let defaults = Self::default();
+            defaults.save_to_path(&path);
+            defaults
+        } else {
+            Self::load_from_path(&path).unwrap_or_default()
+        };
         if !settings.is_configured() {
             debug_log!("CoconutSettings::load: no authorization token configured");
         } else {
@@ -65,21 +72,23 @@ impl CoconutSettings {
         settings
     }
 
-    fn load_from_file() -> Option<Self> {
-        let path = settings_path();
+    fn load_from_path(path: &Path) -> Option<Self> {
         if !path.exists() {
             return None;
         }
-        let content = std::fs::read_to_string(&path).ok()?;
+        let content = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&content).ok()
     }
 
     pub fn save(&self) {
-        let path = settings_path();
+        self.save_to_path(&settings_path());
+    }
+
+    fn save_to_path(&self, path: &Path) {
         debug_log!("CoconutSettings: saving to {:?}", path);
         match serde_json::to_string_pretty(self) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&path, &json) {
+                if let Err(e) = std::fs::write(path, &json) {
                     debug_log!("CoconutSettings: FAILED to write file: {}", e);
                 }
             }
@@ -132,5 +141,47 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let parsed: CoconutSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, s);
+    }
+
+    #[test]
+    fn test_load_from_path_nonexistent_file() {
+        let tmp = std::env::temp_dir().join("cpw_test_nonexistent.json");
+        let _ = std::fs::remove_file(&tmp);
+        assert!(CoconutSettings::load_from_path(&tmp).is_none());
+    }
+
+    #[test]
+    fn test_save_to_path_and_load_roundtrip() {
+        let tmp = std::env::temp_dir().join("cpw_test_roundtrip.json");
+        let _ = std::fs::remove_file(&tmp);
+        let original = CoconutSettings {
+            authorization_token: "Bearer abc".to_string(),
+            window_x: Some(42.0),
+            window_y: Some(99.0),
+            auto_start: true,
+            notification_threshold: 75.0,
+            refresh_interval_secs: 120,
+            theme: Theme::Light,
+            spend_limit: 15.0,
+        };
+        original.save_to_path(&tmp);
+        let loaded = CoconutSettings::load_from_path(&tmp).unwrap();
+        assert_eq!(loaded, original);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_save_defaults_to_path_and_load_roundtrip() {
+        let tmp = std::env::temp_dir().join("cpw_test_first_launch.json");
+        let _ = std::fs::remove_file(&tmp);
+
+        assert!(!tmp.exists());
+        let defaults = CoconutSettings::default();
+        defaults.save_to_path(&tmp);
+        assert!(tmp.exists());
+
+        let loaded = CoconutSettings::load_from_path(&tmp).unwrap();
+        assert_eq!(loaded, CoconutSettings::default());
+        let _ = std::fs::remove_file(&tmp);
     }
 }
