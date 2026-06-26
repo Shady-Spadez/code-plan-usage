@@ -121,8 +121,13 @@ cd installer && build.bat           # 构建 MSI 安装包（需 WiX Toolset）
 ## 构建 Release 产物
 
 ```bash
-cargo build --workspace --release
-Compress-Archive -LiteralPath target\release\coding-plan-widget.exe, target\release\coding-plan-widget-coconut.exe -DestinationPath coding-plan-widget-v0.02-x64.zip -Force
+# 火山引擎
+cargo build -p coding-plan-widget --release
+Compress-Archive -LiteralPath target\release\coding-plan-widget.exe -DestinationPath coding-plan-widget-v0.02-x64.zip -Force
+
+# Coconut
+cargo build --bin coding-plan-widget-coconut --release
+Compress-Archive -LiteralPath target\release\coding-plan-widget-coconut.exe -DestinationPath coding-plan-widget-coconut-v0.02-x64.zip -Force
 ```
 
 ## 许可证
