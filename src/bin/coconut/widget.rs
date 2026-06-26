@@ -48,6 +48,7 @@ pub struct SettingsViewportState {
     pub original_settings: std::rc::Rc<std::cell::RefCell<CoconutSettings>>,
     pub confirm_dialog: std::rc::Rc<std::cell::Cell<bool>>,
     pub webview_receiver: std::rc::Rc<std::cell::RefCell<Option<std::sync::mpsc::Receiver<Option<String>>>>>,
+    pub webview_error: std::rc::Rc<std::cell::RefCell<Option<String>>>,
 }
 
 pub struct CoconutApp {
@@ -322,11 +323,16 @@ impl CoconutApp {
                 self.silent_reauth_in_progress = false;
                 self.silent_reauth_receiver = None;
                 if let Some(token) = result {
-                    debug_log!("Coconut silent reauth: token obtained, retrying fetch");
-                    self.settings.authorization_token = token;
-                    self.settings.save();
-                    self.retry_after_reauth = true;
-                    self.start_refresh();
+                    if token.starts_with("eyJ") {
+                        debug_log!("Coconut silent reauth: token obtained, retrying fetch");
+                        self.settings.authorization_token = token;
+                        self.settings.save();
+                        self.retry_after_reauth = true;
+                        self.start_refresh();
+                    } else {
+                        debug_log!("Coconut silent reauth: received non-JWT value, ignoring");
+                        self.error = Some("Token 过期，请重新登录".to_string());
+                    }
                 } else {
                     debug_log!("Coconut silent reauth: no token obtained");
                     self.error = Some("Token 过期，请重新登录".to_string());
@@ -402,6 +408,7 @@ impl eframe::App for CoconutApp {
             && !self.silent_reauth_in_progress
         {
             self.startup_auto_extract_attempted = true;
+            self.show_settings = true;
             #[cfg(windows)]
             {
                 self.error = Some("正在获取 Token...".to_string());
@@ -440,6 +447,7 @@ impl eframe::App for CoconutApp {
                     let orig_rc = std::rc::Rc::new(std::cell::RefCell::new(self.settings.clone()));
                     let confirm_rc = std::rc::Rc::new(std::cell::Cell::new(false));
                     let webview_rx = std::rc::Rc::new(std::cell::RefCell::new(None));
+                    let webview_err = std::rc::Rc::new(std::cell::RefCell::new(None));
                     self.settings_viewport_data = Some(SettingsViewportState {
                         settings: settings_rc,
                         notification_sent: notif_rc,
@@ -447,6 +455,7 @@ impl eframe::App for CoconutApp {
                         original_settings: orig_rc,
                         confirm_dialog: confirm_rc,
                         webview_receiver: webview_rx,
+                        webview_error: webview_err,
                     });
                 }
 
@@ -545,7 +554,7 @@ impl eframe::App for CoconutApp {
                             Self::render_settings_viewport(
                                 ctx, &mut s.borrow_mut(),
                                 &mut notif_val, &mut tab_val, &mut saved_val, &mut close_req,
-                                &state.webview_receiver,
+                                &state.webview_receiver, &state.webview_error,
                             );
                             n.set(notif_val);
                             t.set(tab_val);
@@ -561,12 +570,23 @@ impl eframe::App for CoconutApp {
                         if let Some(ref rx) = *rx_opt {
                             if let Ok(result) = rx.try_recv() {
                                 if let Some(token) = result {
-                                    debug_log!("WebView2: token received, updating settings");
-                                    let mut s = state.settings.borrow_mut();
-                                    s.authorization_token = token;
-                                    s.save();
-                                    saved.set(true);
-                                    should_close.set(true);
+                                    if token.starts_with("eyJ") {
+                                        debug_log!("WebView2: token received, updating settings");
+                                        let mut s = state.settings.borrow_mut();
+                                        s.authorization_token = token;
+                                        s.save();
+                                        saved.set(true);
+                                        should_close.set(true);
+                                    } else {
+                                        debug_log!("WebView2: received non-JWT value, ignoring");
+                                        state.webview_error.borrow_mut().replace(
+                                            "提取到的值不是有效的 JWT Token，请手动粘贴。".to_string(),
+                                        );
+                                    }
+                                } else {
+                                    state.webview_error.borrow_mut().replace(
+                                        "已检测到登录，但未能提取 Token。请手动粘贴。".to_string(),
+                                    );
                                 }
                                 *rx_opt = None;
                             }
@@ -924,6 +944,7 @@ impl eframe::App for CoconutApp {
 // ── Settings viewport rendering ──────────────────────────────────────────────
 
 impl CoconutApp {
+    #[allow(clippy::too_many_arguments)]
     pub fn render_settings_viewport(
         ctx: &egui::Context,
         settings: &mut CoconutSettings,
@@ -932,6 +953,7 @@ impl CoconutApp {
         saved: &mut bool,
         close_requested: &mut bool,
         webview_receiver: &std::rc::Rc<std::cell::RefCell<Option<std::sync::mpsc::Receiver<Option<String>>>>>,
+        webview_error: &std::rc::Rc<std::cell::RefCell<Option<String>>>,
     ) {
         let accent = Color32::from_rgb(0x00, 0x78, 0xD4);
         let card_bg = Color32::from_rgb(0x2D, 0x2D, 0x32);
@@ -1011,6 +1033,23 @@ impl CoconutApp {
                             *saved = true;
                         }
                     });
+                    {
+                        let wv_rx = webview_receiver.borrow();
+                        let wv_err = webview_error.borrow();
+                        if wv_rx.is_some() {
+                            ui.add_space(4.0);
+                            ui.with_layout(egui::Layout::top_down_justified(egui::Align::Center), |ui| {
+                                ui.label(egui::RichText::new("正在等待控制台登录...").color(Color32::from_rgb(0xCC, 0xCC, 0x66))
+                                    .font(egui::FontId::proportional(12.0)));
+                            });
+                        } else if let Some(ref err) = *wv_err {
+                            ui.add_space(4.0);
+                            ui.with_layout(egui::Layout::top_down_justified(egui::Align::Center), |ui| {
+                                ui.label(egui::RichText::new(err.as_str()).color(Color32::from_rgb(0xFF, 0x66, 0x66))
+                                    .font(egui::FontId::proportional(12.0)));
+                            });
+                        }
+                    }
                 }
 
                 ui.add_space(4.0);

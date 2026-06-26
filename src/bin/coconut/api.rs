@@ -25,7 +25,8 @@ pub struct CheckResult {
     #[allow(dead_code)]
     pub llm_key: String,
     #[serde(rename = "dailyActivity")]
-    pub daily_activity: DailyActivity,
+    #[allow(dead_code)]
+    pub daily_activity: Option<DailyActivity>,
     #[serde(rename = "key_id")]
     #[allow(dead_code)]
     pub key_id: String,
@@ -103,14 +104,40 @@ impl std::fmt::Display for CoconutApiError {
 
 /// Fetch usage data from the Coconut API.
 /// Returns the DailyActivity which includes metadata for monthly totals.
+/// Try to extract a JWT token from a potentially JSON-wrapped value.
+/// If the input looks like JSON (starts with `{` or `[`), parse it and search
+/// all string values for one that starts with `eyJ` (JWT header).
+fn try_extract_jwt(value: &str) -> String {
+    if !value.starts_with('{') && !value.starts_with('[') {
+        return value.to_string();
+    }
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(value) {
+        let mut stack = vec![&v];
+        while let Some(item) = stack.pop() {
+            match item {
+                serde_json::Value::String(s) => {
+                    if s.len() > 20 && s.starts_with("eyJ") {
+                        return s.clone();
+                    }
+                }
+                serde_json::Value::Array(arr) => stack.extend(arr.iter()),
+                serde_json::Value::Object(map) => stack.extend(map.values()),
+                _ => {}
+            }
+        }
+    }
+    value.to_string()
+}
+
 pub fn fetch_usage(auth_token: &str) -> Result<DailyActivity, CoconutApiError> {
     const MAX_RETRIES: u32 = 3;
     let mut last_error: Option<CoconutApiError> = None;
 
-    let auth_header = if auth_token.starts_with("Bearer ") {
-        auth_token.to_string()
+    let token = try_extract_jwt(auth_token);
+    let auth_header = if token.starts_with("Bearer ") {
+        token
     } else {
-        format!("Bearer {}", auth_token)
+        format!("Bearer {}", token)
     };
 
     for attempt in 0..=MAX_RETRIES {
@@ -157,7 +184,12 @@ pub fn fetch_usage(auth_token: &str) -> Result<DailyActivity, CoconutApiError> {
             return Err(CoconutApiError::ApiStatus(api_response.status));
         }
 
-        return Ok(api_response.result.daily_activity);
+        match api_response.result.daily_activity {
+            Some(da) => return Ok(da),
+            None => {
+                return Err(CoconutApiError::ApiStatus("dailyActivity is null".into()));
+            }
+        }
     }
 
     Err(last_error.unwrap_or_else(|| CoconutApiError::Network("unknown".into())))
@@ -192,10 +224,11 @@ mod tests {
         let api_response: ApiResponse = serde_json::from_str(json).expect("should parse");
         assert_eq!(api_response.status, "ok");
         assert!(api_response.result.has_key);
-        assert_eq!(api_response.result.daily_activity.start_date, "2026-06-01");
-        assert_eq!(api_response.result.daily_activity.end_date, "2026-06-30");
+        let da = api_response.result.daily_activity.as_ref().expect("dailyActivity should be present");
+        assert_eq!(da.start_date, "2026-06-01");
+        assert_eq!(da.end_date, "2026-06-30");
 
-        let meta = &api_response.result.daily_activity.metadata;
+        let meta = &da.metadata;
         assert!(meta.total_spend > 0.0);
         assert!(meta.total_tokens > 0);
         assert!(meta.total_api_requests > 0);
@@ -205,7 +238,8 @@ mod tests {
     fn test_metadata_values() {
         let json = include_str!("../../../response.txt");
         let api_response: ApiResponse = serde_json::from_str(json).expect("should parse");
-        let meta = &api_response.result.daily_activity.metadata;
+        let da = api_response.result.daily_activity.as_ref().expect("dailyActivity should be present");
+        let meta = &da.metadata;
 
         assert_eq!(meta.total_spend, 0.6087960158);
         assert_eq!(meta.total_prompt_tokens, 43752057);

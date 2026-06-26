@@ -14,51 +14,48 @@ const TARGET_URL: &str = "https://dash.coconut.is/account/settings/";
 
 const LOGIN_CHECK_SCRIPT: &str = r#"
 (function() {
+    function __cpw_searchObj(obj, depth) {
+        if (!obj || typeof obj !== 'object' || depth > 10) return null;
+        if (Array.isArray(obj)) {
+            for (var i = 0; i < obj.length; i++) {
+                var r = __cpw_searchObj(obj[i], depth + 1);
+                if (r) return r;
+            }
+            return null;
+        }
+        if (typeof obj === 'string') return (obj.length > 20 && obj.startsWith('eyJ')) ? obj : null;
+        for (var p in obj) {
+            if (!obj.hasOwnProperty(p)) continue;
+            var v = obj[p];
+            if (typeof v === 'string' && v.length > 20 && v.startsWith('eyJ')) return v;
+            if (typeof v === 'object' && v !== null) {
+                var r = __cpw_searchObj(v, depth + 1);
+                if (r) return r;
+            }
+        }
+        return null;
+    }
+    function __cpw_unwrapJwt(val) {
+        if (!val || typeof val !== 'string') return null;
+        if (val.startsWith('eyJ')) return val;
+        try { var obj = JSON.parse(val); var r = __cpw_searchObj(obj, 0); if (r) return r; } catch(e) {}
+        return null;
+    }
+    function __cpw_findJwt() {
+        try { for (var i = 0; i < localStorage.length; i++) { var key = localStorage.key(i); var val = localStorage.getItem(key); if (val && val.length > 20) { var lk = key.toLowerCase(); var jwt = (val.startsWith('eyJ') || lk.indexOf('token') !== -1 || lk.indexOf('jwt') !== -1 || lk.indexOf('auth') !== -1 || lk.indexOf('access') !== -1) ? __cpw_unwrapJwt(val) : null; if (jwt) return jwt; } } } catch(e) {}
+        try { for (var j = 0; j < sessionStorage.length; j++) { var sk = sessionStorage.key(j); var sv = sessionStorage.getItem(sk); if (sv && sv.length > 20) { var slk = sk.toLowerCase(); var jwt2 = (sv.startsWith('eyJ') || slk.indexOf('token') !== -1 || slk.indexOf('jwt') !== -1 || slk.indexOf('auth') !== -1) ? __cpw_unwrapJwt(sv) : null; if (jwt2) return jwt2; } } } catch(e) {}
+        try { var nd = window.__NEXT_DATA__; if (nd) { var r = __cpw_searchObj(nd, 0); if (r) return r; } var st = window.__INITIAL_STATE__; if (st) { var r = __cpw_searchObj(st, 0); if (r) return r; } } catch(e) {}
+        try { var cookies = document.cookie.split(';'); for (var k = 0; k < cookies.length; k++) { var c = cookies[k].trim(); var eq = c.indexOf('='); if (eq > 0) { var cv = c.substring(eq + 1); if (cv && cv.length > 20 && cv.startsWith('eyJ')) return cv; } } } catch(e) {}
+        return null;
+    }
+    function __cpw_isLoggedIn() {
+        return !!(document.querySelector('[data-testid="user-menu"]') || document.querySelector('.user-avatar') || document.querySelector('.account-info') || (document.querySelector('[class*="user"]') && document.querySelector('nav')) || document.querySelector('[class*="avatar"]'));
+    }
     var checks = 0;
     var maxChecks = 60;
     var timer = setInterval(function() {
         checks++;
-        var token = localStorage.getItem('token') || localStorage.getItem('authToken')
-            || localStorage.getItem('accessToken') || localStorage.getItem('jwt');
-        if (token) {
-            clearInterval(timer);
-            window.chrome.webview.postMessage('TOKEN:' + token);
-            return;
-        }
-        if (document.querySelector('[data-testid="user-menu"]') ||
-            document.querySelector('.user-avatar') ||
-            document.querySelector('.account-info')) {
-            clearInterval(timer);
-            var state = window.__NEXT_DATA__ || window.__INITIAL_STATE__;
-            if (state && state.token) {
-                window.chrome.webview.postMessage('TOKEN:' + state.token);
-            } else {
-                var cookies = document.cookie.split(';');
-                for (var i = 0; i < cookies.length; i++) {
-                    var c = cookies[i].trim();
-                    if (c.startsWith('token=') || c.startsWith('jwt=')) {
-                        window.chrome.webview.postMessage('TOKEN:' + c.split('=')[1]);
-                        return;
-                    }
-                }
-                window.chrome.webview.postMessage('LOGIN_DETECTED_NO_TOKEN');
-            }
-        } else if (checks >= maxChecks) {
-            clearInterval(timer);
-            window.chrome.webview.postMessage('NO_LOGIN');
-        }
-    }, 1000);
-})();
-"#;
-
-const SILENT_LOGIN_CHECK_SCRIPT: &str = r#"
-(function() {
-    var checks = 0;
-    var maxChecks = 20;
-    var timer = setInterval(function() {
-        checks++;
-        var token = localStorage.getItem('token') || localStorage.getItem('authToken')
-            || localStorage.getItem('accessToken') || localStorage.getItem('jwt');
+        var token = __cpw_findJwt();
         if (token) {
             clearInterval(timer);
             window.chrome.webview.postMessage('TOKEN:' + token);
@@ -66,7 +63,72 @@ const SILENT_LOGIN_CHECK_SCRIPT: &str = r#"
         }
         if (checks >= maxChecks) {
             clearInterval(timer);
-            window.chrome.webview.postMessage('NO_LOGIN');
+            if (__cpw_isLoggedIn()) {
+                window.chrome.webview.postMessage('LOGIN_DETECTED_NO_TOKEN');
+            } else {
+                window.chrome.webview.postMessage('NO_LOGIN');
+            }
+        }
+    }, 1000);
+})();
+"#;
+
+const SILENT_LOGIN_CHECK_SCRIPT: &str = r#"
+(function() {
+    function __cpw_searchObj(obj, depth) {
+        if (!obj || typeof obj !== 'object' || depth > 10) return null;
+        if (Array.isArray(obj)) {
+            for (var i = 0; i < obj.length; i++) {
+                var r = __cpw_searchObj(obj[i], depth + 1);
+                if (r) return r;
+            }
+            return null;
+        }
+        if (typeof obj === 'string') return (obj.length > 20 && obj.startsWith('eyJ')) ? obj : null;
+        for (var p in obj) {
+            if (!obj.hasOwnProperty(p)) continue;
+            var v = obj[p];
+            if (typeof v === 'string' && v.length > 20 && v.startsWith('eyJ')) return v;
+            if (typeof v === 'object' && v !== null) {
+                var r = __cpw_searchObj(v, depth + 1);
+                if (r) return r;
+            }
+        }
+        return null;
+    }
+    function __cpw_unwrapJwt(val) {
+        if (!val || typeof val !== 'string') return null;
+        if (val.startsWith('eyJ')) return val;
+        try { var obj = JSON.parse(val); var r = __cpw_searchObj(obj, 0); if (r) return r; } catch(e) {}
+        return null;
+    }
+    function __cpw_findJwt() {
+        try { for (var i = 0; i < localStorage.length; i++) { var key = localStorage.key(i); var val = localStorage.getItem(key); if (val && val.length > 20) { var lk = key.toLowerCase(); var jwt = (val.startsWith('eyJ') || lk.indexOf('token') !== -1 || lk.indexOf('jwt') !== -1 || lk.indexOf('auth') !== -1 || lk.indexOf('access') !== -1) ? __cpw_unwrapJwt(val) : null; if (jwt) return jwt; } } } catch(e) {}
+        try { for (var j = 0; j < sessionStorage.length; j++) { var sk = sessionStorage.key(j); var sv = sessionStorage.getItem(sk); if (sv && sv.length > 20) { var slk = sk.toLowerCase(); var jwt2 = (sv.startsWith('eyJ') || slk.indexOf('token') !== -1 || slk.indexOf('jwt') !== -1 || slk.indexOf('auth') !== -1) ? __cpw_unwrapJwt(sv) : null; if (jwt2) return jwt2; } } } catch(e) {}
+        try { var nd = window.__NEXT_DATA__; if (nd) { var r = __cpw_searchObj(nd, 0); if (r) return r; } var st = window.__INITIAL_STATE__; if (st) { var r = __cpw_searchObj(st, 0); if (r) return r; } } catch(e) {}
+        try { var cookies = document.cookie.split(';'); for (var k = 0; k < cookies.length; k++) { var c = cookies[k].trim(); var eq = c.indexOf('='); if (eq > 0) { var cv = c.substring(eq + 1); if (cv && cv.length > 20 && cv.startsWith('eyJ')) return cv; } } } catch(e) {}
+        return null;
+    }
+    function __cpw_isLoggedIn() {
+        return !!(document.querySelector('[data-testid="user-menu"]') || document.querySelector('.user-avatar') || document.querySelector('.account-info') || (document.querySelector('[class*="user"]') && document.querySelector('nav')) || document.querySelector('[class*="avatar"]'));
+    }
+    var checks = 0;
+    var maxChecks = 20;
+    var timer = setInterval(function() {
+        checks++;
+        var token = __cpw_findJwt();
+        if (token) {
+            clearInterval(timer);
+            window.chrome.webview.postMessage('TOKEN:' + token);
+            return;
+        }
+        if (checks >= maxChecks) {
+            clearInterval(timer);
+            if (__cpw_isLoggedIn()) {
+                window.chrome.webview.postMessage('LOGIN_DETECTED_NO_TOKEN');
+            } else {
+                window.chrome.webview.postMessage('NO_LOGIN');
+            }
         }
     }, 500);
 })();
@@ -338,10 +400,17 @@ unsafe extern "system" fn silent_wndproc(
 }
 
 fn create_env() -> Result<ICoreWebView2Environment, webview2_com::Error> {
+    use coding_plan_widget_shared::log;
+    let user_data = log::exe_dir().join("coconut_webview_data");
+    let _ = std::fs::create_dir_all(&user_data);
+    let user_data_str = user_data.to_string_lossy();
+    let user_data_wide: Vec<u16> = user_data_str.encode_utf16().chain(std::iter::once(0)).collect();
+
     let (tx, rx) = mpsc::channel();
     CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async_operation(
-        Box::new(|handler| unsafe {
-            CreateCoreWebView2EnvironmentWithOptions(None, None, None, &handler)
+        Box::new(move |handler| unsafe {
+            let folder = windows::core::PCWSTR(user_data_wide.as_ptr());
+            CreateCoreWebView2EnvironmentWithOptions(None, folder, None, &handler)
                 .map_err(webview2_com::Error::WindowsError)
         }),
         Box::new(move |error_code, environment| {
@@ -413,6 +482,7 @@ fn setup_message_handler(
                     } else if message == "LOGIN_DETECTED_NO_TOKEN" {
                         debug_log!("Coconut WebView2: login detected but no token found");
                         if let Some(tx) = tx_cell.borrow_mut().take() { let _ = tx.send(None); }
+                        unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) }.ok();
                     } else if message == "NO_LOGIN" {
                         debug_log!("Coconut WebView2: no login detected");
                         if let Some(tx) = tx_cell.borrow_mut().take() { let _ = tx.send(None); }
