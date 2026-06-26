@@ -291,3 +291,46 @@
 - `src/widget.rs`: `start_refresh()` 在 `!is_configured()` 时设置 `self.error = Some("未配置凭证")`
 - `src/widget.rs`: update() 渲染分支：有 error 时在圆形右侧显示红色文字，否则居中显示百分比
 - `src/theme.rs`: `ThemeColors` 仅含 `bg_fill`, `circle_bg`, `widget_fg`（无 `unconfigured_*` 字段）
+
+---
+
+## 13. Coconut 首次启动磁盘默认文件生成
+
+**Date**: 2026-06-26
+**Status**: ✅ Implemented
+
+### Description
+补齐 CoconutSettings::load() 的语义：首次启动（coconut_settings.json 不存在）时，将内存 Default 值写入磁盘，确保配置文件自动生成。
+
+### Acceptance Criteria
+- [x] 首次启动时自动写入 coconut_settings.json 默认文件
+- [x] 文件已存在时行为不变，从文件读取
+- [x] 写入失败不中断程序，仍返回内存默认值
+- [x] 3 条新增单元测试覆盖首次写入、文件往返、不存在路径
+
+### Implementation Notes
+- `src/bin/coconut/settings.rs`: load() 重构为先检查文件存在性再加载；新增 load_from_path()/save_to_path() 参数化路径
+
+---
+
+## 14. Coconut 启动静默 Token 自动提取
+
+**Date**: 2026-06-26
+**Status**: ✅ Implemented
+
+### Description
+Coconut 应用启动时，若 authorization_token 未配置，自动通过隐藏 WebView2 窗口静默提取 JWT token，无需用户交互。提取成功则自动保存并开始刷新用量数据；提取失败则显示「未配置 Token」提示（保持现有行为）。
+
+### Acceptance Criteria
+- [x] 启动时若 token 为空，自动创建隐藏 WebView2 窗口尝试从 `dash.coconut.is` 静默提取 JWT token（20s 超时，20 次轮询）
+- [x] 提取成功：自动保存到 `coconut_settings.json`，widget 开始正常显示用量数据
+- [x] 提取失败/超时：widget 显示「未配置 Token」红色提示
+- [x] 启动自动提取仅执行一次（`startup_auto_extract_attempted` 标记）
+- [x] 提取期间 widget 显示「正在获取 Token...」
+- [x] 不影响现有 401/403 静默重认证流程（冷却 300s 保持不变）
+- [x] 不影响设置面板中「打开控制台」交互式登录按钮
+- [x] 非 Windows 平台不执行提取，直接显示「未配置 Token」
+
+### Implementation Notes
+- `src/bin/coconut/widget.rs`: `CoconutApp` 新增 `startup_auto_extract_attempted: bool` 字段（默认 false）；`update()` 首帧检测 `!is_configured() && !startup_auto_extract_attempted && !silent_reauth_in_progress` → 调用 `start_silent_reauth()` 复用现有静默提取机制；失败时 `check_silent_reauth_result()` 完成后覆盖错误文案为「未配置 Token」
+- `src/bin/coconut/webview_login.rs`: 复用 `try_silent_extract_token()` + `SILENT_LOGIN_CHECK_SCRIPT`，不改动

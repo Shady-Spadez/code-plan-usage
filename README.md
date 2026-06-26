@@ -73,8 +73,9 @@ cargo build --bin coding-plan-widget-coconut --release  # Coconut
 
 ### Coconut (coding-plan-widget-coconut)
 
-1. **WebView2 登录（推荐）**：启动时弹出登录窗口，自动从 `dash.coconut.is` 获取 JWT Token。
-2. **手动配置**：编辑 `coconut_settings.json`，填入 `authorization_token` (Bearer Token)。
+1. **静默自动提取（推荐）**：启动时自动通过隐藏 WebView2 窗口从 `dash.coconut.is` 获取 JWT Token（无需用户交互），提取成功后自动保存并开始刷新。
+2. **WebView2 登录**：在设置面板点击「打开控制台」，通过可见 WebView2 窗口登录并提取 Token。
+3. **手动配置**：编辑 `coconut_settings.json`，填入 `authorization_token` (Bearer Token)。
 
 ## 设置
 

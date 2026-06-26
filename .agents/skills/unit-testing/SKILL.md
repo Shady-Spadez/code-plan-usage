@@ -56,7 +56,7 @@ crates/volcengine/src/
 src/bin/
 ├── coconut.rs                 ← 无测试（入口）
 └── coconut/
-    ├── api.rs                 ← 含 #[cfg(test)] mod tests (6 条)
+    ├── api.rs                 ← 含 #[cfg(test)] mod tests (11 条)
     ├── settings.rs            ← 含 #[cfg(test)] mod tests (6 条)
     ├── webview_login.rs       ← 无测试
     └── widget.rs              ← 无测试
@@ -153,7 +153,7 @@ cargo test --workspace -- --nocapture
 | `color_key` | `crates/shared/src/widgets/color_key.rs` | 0 | — | 暂不要求（framebuffer） |
 | `settings_panel` | `crates/shared/src/widgets/settings_panel.rs` | 0 | — | 暂不要求（egui 渲染） |
 | `main.rs` (volcengine) | `crates/volcengine/src/main.rs` | 0 | — | 暂不要求（入口） |
-| coconut api | `src/bin/coconut/api.rs` | 6 | ⚠️ 已覆盖日期解析 | 参照 volcengine api |
+| coconut api | `src/bin/coconut/api.rs` | 11 | ✅ 已覆盖反序列化/日期解析/CoconutApiError | 参照 volcengine api |
 | coconut settings | `src/bin/coconut/settings.rs` | 6 | ✅ 已覆盖序列化/默认值/首次写入磁盘/文件往返 | 参照 volcengine settings |
 | coconut widget/webview_login | `src/bin/coconut/` | 0 | — | 暂不要求 |
 
@@ -162,7 +162,7 @@ cargo test --workspace -- --nocapture
 椰子变体（`coding-plan-widget-coconut`）模块是 volcengine 变体的并行副本，测试义务参照 volcengine 对应行：
 
 - `src/bin/coconut/settings.rs` → 测试义务同 `crates/volcengine/src/settings.rs`（已有 3 条）
-- `src/bin/coconut/api.rs` → 测试义务同 `crates/volcengine/src/api.rs`（已有 6 条：2 条反序列化 + 4 条 is_end_date_passed）
+- `src/bin/coconut/api.rs` → 测试义务同 `crates/volcengine/src/api.rs`（已有 11 条：2 条反序列化 + 5 条 is_end_date_passed + 5 条 CoconutApiError Display/Debug）
 - `src/bin/coconut/widget.rs` → 测试义务同 `crates/volcengine/src/widget.rs`
 - `src/bin/coconut/webview_login.rs` → 测试义务同 `crates/volcengine/src/webview_login.rs`
 

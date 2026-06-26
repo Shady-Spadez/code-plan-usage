@@ -75,6 +75,7 @@ pub struct CoconutApp {
     pub silent_reauth_in_progress: bool,
     pub silent_reauth_receiver: Option<std::sync::mpsc::Receiver<Option<String>>>,
     pub retry_after_reauth: bool,
+    pub startup_auto_extract_attempted: bool,
     pub last_silent_reauth: Option<Instant>,
     pub logo_texture: Option<egui::TextureHandle>,
 }
@@ -108,6 +109,7 @@ impl CoconutApp {
             silent_reauth_in_progress: false,
             silent_reauth_receiver: None,
             retry_after_reauth: false,
+            startup_auto_extract_attempted: false,
             last_silent_reauth: None,
             logo_texture: None,
         }
@@ -384,10 +386,31 @@ impl eframe::App for CoconutApp {
 
         if self.check_silent_reauth_result() {
             ctx.request_repaint();
+            if self.startup_auto_extract_attempted && !self.settings.is_configured() {
+                self.error = Some("未配置 Token".to_string());
+            }
         }
 
         if self.refresh_in_progress || self.silent_reauth_in_progress {
             ctx.request_repaint();
+        }
+
+        // On startup, last_silent_reauth is None so can_start_silent_reauth() is
+        // naturally true; no separate cooldown check needed here.
+        if !self.settings.is_configured()
+            && !self.startup_auto_extract_attempted
+            && !self.silent_reauth_in_progress
+        {
+            self.startup_auto_extract_attempted = true;
+            #[cfg(windows)]
+            {
+                self.error = Some("正在获取 Token...".to_string());
+                self.start_silent_reauth();
+            }
+            #[cfg(not(windows))]
+            {
+                self.error = Some("未配置 Token".to_string());
+            }
         }
 
         let target = self.activity.as_ref()

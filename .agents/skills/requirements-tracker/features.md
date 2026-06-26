@@ -149,3 +149,15 @@
 ### Known Limitations
 - 用户从未使用 WebView2 登录（手动粘贴 Cookie）时，静默提取无法获取凭证
 - WebView2 未安装时静默提取失败，显示"Cookie 过期"
+
+---
+
+## Coconut 首次启动磁盘默认文件生成
+
+**Verified**: 2026-06-26
+
+### Summary
+首次启动时自动将 CoconutSettings 默认值写入 coconut_settings.json，后续启动从文件读取。写入失败不中断程序。
+
+### Key Files
+- `src/bin/coconut/settings.rs` — load() 首次写入逻辑，load_from_path()/save_to_path() 路径参数化
