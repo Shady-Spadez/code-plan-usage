@@ -1,0 +1,370 @@
+{
+    "result": {
+        "hasKey": true,
+        "llmKey": "sk-VTj1VKgkrsi1P99D3Jhcyw",
+        "dailyActivity": {
+            "startDate": "2026-06-01",
+            "endDate": "2026-06-30",
+            "results": [
+                {
+                    "date": "2026-06-25",
+                    "metrics": {
+                        "spend": 0.6087960158,
+                        "prompt_tokens": 43752057,
+                        "completion_tokens": 239167,
+                        "cache_read_input_tokens": 42846336,
+                        "cache_creation_input_tokens": 0,
+                        "total_tokens": 43991224,
+                        "successful_requests": 657,
+                        "failed_requests": 3,
+                        "api_requests": 660
+                    },
+                    "breakdown": {
+                        "mcp_servers": {},
+                        "models": {
+                            "deepseek/deepseek-v4-pro": {
+                                "metrics": {
+                                    "spend": 0,
+                                    "prompt_tokens": 0,
+                                    "completion_tokens": 0,
+                                    "cache_read_input_tokens": 0,
+                                    "cache_creation_input_tokens": 0,
+                                    "total_tokens": 0,
+                                    "successful_requests": 0,
+                                    "failed_requests": 3,
+                                    "api_requests": 3
+                                },
+                                "metadata": {},
+                                "api_key_breakdown": {
+                                    "a69cbeede9999cb2c20b1b4b079c7e5e2371421f0629783ad4d9756215c15394": {
+                                        "metrics": {
+                                            "spend": 0,
+                                            "prompt_tokens": 0,
+                                            "completion_tokens": 0,
+                                            "cache_read_input_tokens": 0,
+                                            "cache_creation_input_tokens": 0,
+                                            "total_tokens": 0,
+                                            "successful_requests": 0,
+                                            "failed_requests": 3,
+                                            "api_requests": 3
+                                        },
+                                        "metadata": {
+                                            "key_alias": "tianyao.zhang@coconut.is",
+                                            "team_id": "bf0e3161-6e15-4e5d-a27e-3c91014a0f84"
+                                        }
+                                    }
+                                }
+                            },
+                            "deepseek-v4-flash": {
+                                "metrics": {
+                                    "spend": 0.08967122079999998,
+                                    "prompt_tokens": 8286076,
+                                    "completion_tokens": 74449,
+                                    "cache_read_input_tokens": 7953536,
+                                    "cache_creation_input_tokens": 0,
+                                    "total_tokens": 8360525,
+                                    "successful_requests": 262,
+                                    "failed_requests": 0,
+                                    "api_requests": 262
+                                },
+                                "metadata": {},
+                                "api_key_breakdown": {
+                                    "a69cbeede9999cb2c20b1b4b079c7e5e2371421f0629783ad4d9756215c15394": {
+                                        "metrics": {
+                                            "spend": 0.08967122079999998,
+                                            "prompt_tokens": 8286076,
+                                            "completion_tokens": 74449,
+                                            "cache_read_input_tokens": 7953536,
+                                            "cache_creation_input_tokens": 0,
+                                            "total_tokens": 8360525,
+                                            "successful_requests": 262,
+                                            "failed_requests": 0,
+                                            "api_requests": 262
+                                        },
+                                        "metadata": {
+                                            "key_alias": "tianyao.zhang@coconut.is",
+                                            "team_id": "bf0e3161-6e15-4e5d-a27e-3c91014a0f84"
+                                        }
+                                    }
+                                }
+                            },
+                            "deepseek-v4-pro": {
+                                "metrics": {
+                                    "spend": 0.519124795,
+                                    "prompt_tokens": 35465981,
+                                    "completion_tokens": 164718,
+                                    "cache_read_input_tokens": 34892800,
+                                    "cache_creation_input_tokens": 0,
+                                    "total_tokens": 35630699,
+                                    "successful_requests": 395,
+                                    "failed_requests": 0,
+                                    "api_requests": 395
+                                },
+                                "metadata": {},
+                                "api_key_breakdown": {
+                                    "a69cbeede9999cb2c20b1b4b079c7e5e2371421f0629783ad4d9756215c15394": {
+                                        "metrics": {
+                                            "spend": 0.519124795,
+                                            "prompt_tokens": 35465981,
+                                            "completion_tokens": 164718,
+                                            "cache_read_input_tokens": 34892800,
+                                            "cache_creation_input_tokens": 0,
+                                            "total_tokens": 35630699,
+                                            "successful_requests": 395,
+                                            "failed_requests": 0,
+                                            "api_requests": 395
+                                        },
+                                        "metadata": {
+                                            "key_alias": "tianyao.zhang@coconut.is",
+                                            "team_id": "bf0e3161-6e15-4e5d-a27e-3c91014a0f84"
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "model_groups": {
+                            "deepseek/deepseek-v4-flash": {
+                                "metrics": {
+                                    "spend": 0.08967122079999998,
+                                    "prompt_tokens": 8286076,
+                                    "completion_tokens": 74449,
+                                    "cache_read_input_tokens": 7953536,
+                                    "cache_creation_input_tokens": 0,
+                                    "total_tokens": 8360525,
+                                    "successful_requests": 262,
+                                    "failed_requests": 0,
+                                    "api_requests": 262
+                                },
+                                "metadata": {},
+                                "api_key_breakdown": {
+                                    "a69cbeede9999cb2c20b1b4b079c7e5e2371421f0629783ad4d9756215c15394": {
+                                        "metrics": {
+                                            "spend": 0.08967122079999998,
+                                            "prompt_tokens": 8286076,
+                                            "completion_tokens": 74449,
+                                            "cache_read_input_tokens": 7953536,
+                                            "cache_creation_input_tokens": 0,
+                                            "total_tokens": 8360525,
+                                            "successful_requests": 262,
+                                            "failed_requests": 0,
+                                            "api_requests": 262
+                                        },
+                                        "metadata": {
+                                            "key_alias": "tianyao.zhang@coconut.is",
+                                            "team_id": "bf0e3161-6e15-4e5d-a27e-3c91014a0f84"
+                                        }
+                                    }
+                                }
+                            },
+                            "deepseek/deepseek-v4-pro": {
+                                "metrics": {
+                                    "spend": 0.519124795,
+                                    "prompt_tokens": 35465981,
+                                    "completion_tokens": 164718,
+                                    "cache_read_input_tokens": 34892800,
+                                    "cache_creation_input_tokens": 0,
+                                    "total_tokens": 35630699,
+                                    "successful_requests": 395,
+                                    "failed_requests": 0,
+                                    "api_requests": 395
+                                },
+                                "metadata": {},
+                                "api_key_breakdown": {
+                                    "a69cbeede9999cb2c20b1b4b079c7e5e2371421f0629783ad4d9756215c15394": {
+                                        "metrics": {
+                                            "spend": 0.519124795,
+                                            "prompt_tokens": 35465981,
+                                            "completion_tokens": 164718,
+                                            "cache_read_input_tokens": 34892800,
+                                            "cache_creation_input_tokens": 0,
+                                            "total_tokens": 35630699,
+                                            "successful_requests": 395,
+                                            "failed_requests": 0,
+                                            "api_requests": 395
+                                        },
+                                        "metadata": {
+                                            "key_alias": "tianyao.zhang@coconut.is",
+                                            "team_id": "bf0e3161-6e15-4e5d-a27e-3c91014a0f84"
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "providers": {
+                            "unknown": {
+                                "metrics": {
+                                    "spend": 0,
+                                    "prompt_tokens": 0,
+                                    "completion_tokens": 0,
+                                    "cache_read_input_tokens": 0,
+                                    "cache_creation_input_tokens": 0,
+                                    "total_tokens": 0,
+                                    "successful_requests": 0,
+                                    "failed_requests": 3,
+                                    "api_requests": 3
+                                },
+                                "metadata": {},
+                                "api_key_breakdown": {
+                                    "a69cbeede9999cb2c20b1b4b079c7e5e2371421f0629783ad4d9756215c15394": {
+                                        "metrics": {
+                                            "spend": 0,
+                                            "prompt_tokens": 0,
+                                            "completion_tokens": 0,
+                                            "cache_read_input_tokens": 0,
+                                            "cache_creation_input_tokens": 0,
+                                            "total_tokens": 0,
+                                            "successful_requests": 0,
+                                            "failed_requests": 3,
+                                            "api_requests": 3
+                                        },
+                                        "metadata": {
+                                            "key_alias": "tianyao.zhang@coconut.is",
+                                            "team_id": "bf0e3161-6e15-4e5d-a27e-3c91014a0f84"
+                                        }
+                                    }
+                                }
+                            },
+                            "deepseek": {
+                                "metrics": {
+                                    "spend": 0.6087960158,
+                                    "prompt_tokens": 43752057,
+                                    "completion_tokens": 239167,
+                                    "cache_read_input_tokens": 42846336,
+                                    "cache_creation_input_tokens": 0,
+                                    "total_tokens": 43991224,
+                                    "successful_requests": 657,
+                                    "failed_requests": 0,
+                                    "api_requests": 657
+                                },
+                                "metadata": {},
+                                "api_key_breakdown": {
+                                    "a69cbeede9999cb2c20b1b4b079c7e5e2371421f0629783ad4d9756215c15394": {
+                                        "metrics": {
+                                            "spend": 0.6087960158,
+                                            "prompt_tokens": 43752057,
+                                            "completion_tokens": 239167,
+                                            "cache_read_input_tokens": 42846336,
+                                            "cache_creation_input_tokens": 0,
+                                            "total_tokens": 43991224,
+                                            "successful_requests": 657,
+                                            "failed_requests": 0,
+                                            "api_requests": 657
+                                        },
+                                        "metadata": {
+                                            "key_alias": "tianyao.zhang@coconut.is",
+                                            "team_id": "bf0e3161-6e15-4e5d-a27e-3c91014a0f84"
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "endpoints": {
+                            "/chat/completions": {
+                                "metrics": {
+                                    "spend": 0.4918120116,
+                                    "prompt_tokens": 39240438,
+                                    "completion_tokens": 211438,
+                                    "cache_read_input_tokens": 38643328,
+                                    "cache_creation_input_tokens": 0,
+                                    "total_tokens": 39451876,
+                                    "successful_requests": 560,
+                                    "failed_requests": 0,
+                                    "api_requests": 560
+                                },
+                                "metadata": {},
+                                "api_key_breakdown": {
+                                    "a69cbeede9999cb2c20b1b4b079c7e5e2371421f0629783ad4d9756215c15394": {
+                                        "metrics": {
+                                            "spend": 0.4918120116,
+                                            "prompt_tokens": 39240438,
+                                            "completion_tokens": 211438,
+                                            "cache_read_input_tokens": 38643328,
+                                            "cache_creation_input_tokens": 0,
+                                            "total_tokens": 39451876,
+                                            "successful_requests": 560,
+                                            "failed_requests": 0,
+                                            "api_requests": 560
+                                        },
+                                        "metadata": {
+                                            "key_alias": "tianyao.zhang@coconut.is",
+                                            "team_id": "bf0e3161-6e15-4e5d-a27e-3c91014a0f84"
+                                        }
+                                    }
+                                }
+                            },
+                            "/responses": {
+                                "metrics": {
+                                    "spend": 0.1169840042,
+                                    "prompt_tokens": 4511619,
+                                    "completion_tokens": 27729,
+                                    "cache_read_input_tokens": 4203008,
+                                    "cache_creation_input_tokens": 0,
+                                    "total_tokens": 4539348,
+                                    "successful_requests": 97,
+                                    "failed_requests": 0,
+                                    "api_requests": 97
+                                },
+                                "metadata": {},
+                                "api_key_breakdown": {
+                                    "a69cbeede9999cb2c20b1b4b079c7e5e2371421f0629783ad4d9756215c15394": {
+                                        "metrics": {
+                                            "spend": 0.1169840042,
+                                            "prompt_tokens": 4511619,
+                                            "completion_tokens": 27729,
+                                            "cache_read_input_tokens": 4203008,
+                                            "cache_creation_input_tokens": 0,
+                                            "total_tokens": 4539348,
+                                            "successful_requests": 97,
+                                            "failed_requests": 0,
+                                            "api_requests": 97
+                                        },
+                                        "metadata": {
+                                            "key_alias": "tianyao.zhang@coconut.is",
+                                            "team_id": "bf0e3161-6e15-4e5d-a27e-3c91014a0f84"
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "api_keys": {
+                            "a69cbeede9999cb2c20b1b4b079c7e5e2371421f0629783ad4d9756215c15394": {
+                                "metrics": {
+                                    "spend": 0.6087960158,
+                                    "prompt_tokens": 43752057,
+                                    "completion_tokens": 239167,
+                                    "cache_read_input_tokens": 42846336,
+                                    "cache_creation_input_tokens": 0,
+                                    "total_tokens": 43991224,
+                                    "successful_requests": 657,
+                                    "failed_requests": 3,
+                                    "api_requests": 660
+                                },
+                                "metadata": {
+                                    "key_alias": "tianyao.zhang@coconut.is",
+                                    "team_id": "bf0e3161-6e15-4e5d-a27e-3c91014a0f84"
+                                }
+                            }
+                        },
+                        "entities": {}
+                    }
+                }
+            ],
+            "metadata": {
+                "total_spend": 0.6087960158,
+                "total_prompt_tokens": 43752057,
+                "total_completion_tokens": 239167,
+                "total_tokens": 43991224,
+                "total_api_requests": 660,
+                "total_successful_requests": 657,
+                "total_failed_requests": 3,
+                "total_cache_read_input_tokens": 42846336,
+                "total_cache_creation_input_tokens": 0,
+                "page": 1,
+                "total_pages": 1,
+                "has_more": false
+            }
+        },
+        "key_id": "a69cbeede9999cb2c20b1b4b079c7e5e2371421f0629783ad4d9756215c15394"
+    },
+    "status": "ok"
+}
