@@ -1,0 +1,23 @@
+{
+  "models": {
+    "high": "ds/deepseek-v4-pro",
+    "medium": "ds/deepseek-v4-pro",
+    "low": "ds/deepseek-v4-flash"
+  },
+  "agents": {
+    "build": "medium",
+    "plan": "medium",
+    "general": "medium",
+    "explore": "low",
+    "code-reviewer": "high",
+    "verifier": "high",
+    "fixer": "medium"
+  },
+  "roles": {
+    "review": "high",
+    "verify": "high",
+    "review_escalate": "high",
+    "summarization": "low",
+    "rubric": "high"
+  }
+}
