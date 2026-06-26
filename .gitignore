@@ -21,3 +21,7 @@ coding_plan_settings.json
 .DS_Store
 Thumbs.db
 nul
+
+# Sensitive / local data
+authorization.txt
+dash.coconut.is_cookies.txt
